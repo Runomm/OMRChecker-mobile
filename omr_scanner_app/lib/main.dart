@@ -9,7 +9,7 @@ import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ⚙️  CONFIG — backend machine's LAN IP (auto-detected: 172.20.10.6)
+// ⚙️  CONFIG — backend machine's LAN IP
 // ─────────────────────────────────────────────────────────────────────────────
 const String kApiBaseUrl = 'http://172.20.10.6:8000';
 const String kEvaluateEndpoint = '$kApiBaseUrl/evaluate';
@@ -160,7 +160,23 @@ class _ScannerScreenState extends State<ScannerScreen>
         );
       }
     } on HttpException catch (e) {
-      if (mounted) _showErrorSheet('Server Error', e.message);
+      if (mounted) {
+        final msg = e.message.toLowerCase();
+        if (msg.contains('shape') ||
+            msg.contains('nonetype') ||
+            msg.contains('not found') ||
+            msg.contains('unpack')) {
+          _showErrorSheet(
+            '📸 Fotoğraf Okunamadı!',
+            'Lütfen şunlara dikkat edin:\n\n'
+                '• Kağıdın 4 köşesindeki yuvarlaklar tam olarak görünmeli.\n'
+                '• Ekran veya kağıt üzerinde parlama/yansıma olmamalı.\n'
+                '• Görüntü net ve odaklanmış olmalı.',
+          );
+        } else {
+          _showErrorSheet('Server Error', e.message);
+        }
+      }
     } on FormatException {
       if (mounted) {
         _showErrorSheet(
@@ -270,19 +286,102 @@ class _ScannerScreenState extends State<ScannerScreen>
 // Sub-widgets
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _FullscreenPreview extends StatelessWidget {
+class _FullscreenPreview extends StatefulWidget {
   final CameraController controller;
   const _FullscreenPreview({required this.controller});
+
+  @override
+  State<_FullscreenPreview> createState() => _FullscreenPreviewState();
+}
+
+class _FullscreenPreviewState extends State<_FullscreenPreview>
+    with SingleTickerProviderStateMixin {
+  Offset? _tapDownPosition;
+  late AnimationController _focusAnimController;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusAnimController = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 500));
+  }
+
+  @override
+  void dispose() {
+    _focusAnimController.dispose();
+    super.dispose();
+  }
+
+  void _onTapDown(TapDownDetails details, BoxConstraints constraints) {
+    final x = details.localPosition.dx / constraints.maxWidth;
+    final y = details.localPosition.dy / constraints.maxHeight;
+
+    try {
+      widget.controller.setFocusPoint(Offset(x, y));
+      widget.controller.setExposurePoint(Offset(x, y));
+    } catch (_) {}
+
+    setState(() => _tapDownPosition = details.localPosition);
+    _focusAnimController.forward(from: 0.0).then((_) {
+      if (mounted) setState(() => _tapDownPosition = null);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
-    final previewRatio = controller.value.aspectRatio;
-    final screen = MediaQuery.of(context).size;
-    final screenRatio = screen.width / screen.height;
-    final scale = previewRatio < screenRatio
-        ? screenRatio / previewRatio
-        : previewRatio / screenRatio;
-    return Transform.scale(
-        scale: scale, child: Center(child: CameraPreview(controller)));
+    if (!widget.controller.value.isInitialized) return const SizedBox.shrink();
+    // Use AspectRatio to ensure the entire camera frame is visible without cropping.
+    final previewRatio = widget.controller.value.aspectRatio;
+    return Container(
+      color: Colors.black,
+      child: Center(
+        child: AspectRatio(
+          aspectRatio: 1 / previewRatio,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTapDown: (details) => _onTapDown(details, constraints),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    CameraPreview(widget.controller),
+                    if (_tapDownPosition != null)
+                      Positioned(
+                        left: _tapDownPosition!.dx - 24,
+                        top: _tapDownPosition!.dy - 24,
+                        child: AnimatedBuilder(
+                          animation: _focusAnimController,
+                          builder: (context, child) {
+                            final scale = 1.0 - _focusAnimController.value * 0.1;
+                            final opacity = 1.0 - _focusAnimController.value;
+                            return Transform.scale(
+                              scale: scale,
+                              child: Opacity(
+                                opacity: opacity,
+                                child: Container(
+                                  width: 48,
+                                  height: 48,
+                                  decoration: BoxDecoration(
+                                    border: Border.all(
+                                        color: const Color(0xFF7C6BE8),
+                                        width: 2.5),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
   }
 }
 
