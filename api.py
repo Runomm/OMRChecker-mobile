@@ -301,10 +301,42 @@ async def evaluate(file: UploadFile = File(..., description="OMR sheet image (JP
     roll = first.get("Roll", first.get("roll", "N/A"))
     score = first.get("score", "N/A")
 
+    # 1 & 2. Find Isim from ogrenciler.csv
+    isim = "Bilinmeyen Ogrenci"
+    try:
+        ogrenciler_path = BASE_DIR / "ogrenciler.csv"
+        if ogrenciler_path.exists():
+            ogrenciler_df = pd.read_csv(ogrenciler_path, dtype=str)
+            # Ensure safe stripping of whitespace just in case
+            ogrenciler_df.columns = ogrenciler_df.columns.str.strip()
+            if "Ogrenci_No" in ogrenciler_df.columns and "Isim" in ogrenciler_df.columns:
+                match = ogrenciler_df[ogrenciler_df["Ogrenci_No"] == str(roll).strip()]
+                if not match.empty:
+                    isim = match.iloc[0]["Isim"]
+    except Exception as exc:
+        log.warning("Could not read ogrenciler.csv or find student: %s", exc)
+
+    # 3. Append to final_notlar.csv
+    import datetime
+    try:
+        final_file = BASE_DIR / "final_notlar.csv"
+        file_exists = final_file.exists()
+        with open(final_file, "a", encoding="utf-8") as f:
+            if not file_exists:
+                f.write("Ogrenci_No,Isim,Score,Tarih\n")
+            now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # Replace commas in isim to avoid breaking CSV format
+            safe_isim = str(isim).replace(",", " ")
+            f.write(f"{roll},{safe_isim},{score},{now_str}\n")
+    except Exception as exc:
+        log.error("Could not write to final_notlar.csv: %s", exc)
+
+    # 4. Include 'isim' in JSON response
     return JSONResponse(
         content={
             "status": "ok",
             "roll_number": roll,
+            "isim": isim,
             "score": score,
             "results": records,
         }
