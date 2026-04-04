@@ -1,0 +1,28 @@
+[21:35:18] INFO     Loading OMRChecker modules...                 __init__.py:5
+[21:35:19] INFO     Loading processors from "src.processors"...   manager.py:53
+           INFO     Loaded processors: ['CropOnMarkers',          manager.py:76
+                    'CropPage', 'FeatureBasedAlignment',                       
+                    'GaussianBlur', 'Levels', 'MedianBlur']                    
+           INFO     Loading config.json: inputs\config.json   validations.py:84
+           INFO     Loading template.json:                    validations.py:49
+                    inputs\template.json                                       
+Traceback (most recent call last):
+  File "C:\Users\mehon\OneDrive\Masaüstü\Projects\OMRChecker-mobile\main.py", line 99, in <module>
+    entry_point_for_args(args)
+  File "C:\Users\mehon\OneDrive\Masaüstü\Projects\OMRChecker-mobile\main.py", line 91, in entry_point_for_args
+    entry_point(
+  File "C:\Users\mehon\OneDrive\Masaüstü\Projects\OMRChecker-mobile\src\entry.py", line 41, in entry_point
+    return process_dir(input_dir, curr_dir, args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\mehon\OneDrive\Masaüstü\Projects\OMRChecker-mobile\src\entry.py", line 96, in process_dir
+    template = Template(
+               ^^^^^^^^^
+  File "C:\Users\mehon\OneDrive\Masaüstü\Projects\OMRChecker-mobile\src\template.py", line 60, in __init__
+    self.fill_output_columns(non_custom_columns, all_custom_columns)
+  File "C:\Users\mehon\OneDrive\Masaüstü\Projects\OMRChecker-mobile\src\template.py", line 123, in fill_output_columns
+    self.output_columns = sorted(
+                          ^^^^^^^
+  File "C:\Users\mehon\OneDrive\Masaüstü\Projects\OMRChecker-mobile\src\utils\parsing.py", line 104, in custom_sort_output_columns
+    label_prefix, label_suffix = re.findall(FIELD_LABEL_NUMBER_REGEX, field_label)[0]
+                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^
+IndexError: list index out of range

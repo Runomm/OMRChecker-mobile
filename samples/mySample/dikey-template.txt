@@ -1,0 +1,54 @@
+{
+  "pageDimensions": [2100, 2970],
+  "bubbleDimensions": [32, 32], 
+  "preProcessors": [
+    {
+      "name": "CropOnMarkers",
+      "options": {
+        "relativePath": "omr_marker.jpg",
+        "sheetToMarkerWidthRatio": 17
+      }
+    },
+    {
+      "name": "GaussianBlur",
+      "options": {
+        "kSize": [3, 3],
+        "sigmaX": 0
+      }
+    },
+    {
+      "name": "Levels",
+      "options": {
+        "low": 0.2,
+        "high": 0.95
+      }
+    }
+  ],
+
+      "fieldBlocks": {
+      "Ogrenci_No": {
+      "origin": [300, 780],
+      "bubblesGap": 145,
+      "labelsGap": 80,
+      "fieldLabels": ["H1", "H2", "H3", "H4", "H5", "H6", "H7", "H8", "H9"],
+      "bubbleValues": ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"],
+      "direction": "vertical"
+    },
+    "Sorular_1_10": {
+      "origin": [1060, 720],
+      "bubblesGap": 65,
+      "labelsGap": 165,
+      "fieldLabels": ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "S10"],
+      "bubbleValues": ["A", "B", "C", "D", "E"],
+      "direction": "horizontal"
+    },
+    "Sorular_11_20": {
+      "origin": [1475, 720],
+      "bubblesGap": 65,
+      "labelsGap": 165,
+      "fieldLabels": ["S11", "S12", "S13", "S14", "S15", "S16", "S17", "S18", "S19", "S20"],
+      "bubbleValues": ["A", "B", "C", "D", "E"],
+      "direction": "horizontal"
+    }
+  }
+}

@@ -24,8 +24,9 @@ Future<void> main() async {
     statusBarColor: Colors.transparent,
     statusBarIconBrightness: Brightness.light,
   ));
-  final cameras = await availableCameras();
-  runApp(OmrScannerApp(cameras: cameras));
+  final allCameras = await availableCameras();
+  final backCameras = allCameras.where((c) => c.lensDirection == CameraLensDirection.back).toList();
+  runApp(OmrScannerApp(cameras: backCameras));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -53,7 +54,7 @@ class OmrScannerApp extends StatelessWidget {
       ),
       home: cameras.isEmpty
           ? const _NoCameraScreen()
-          : ScannerScreen(camera: cameras.first),
+          : ScannerScreen(cameras: cameras),
     );
   }
 }
@@ -70,7 +71,7 @@ class _NoCameraScreen extends StatelessWidget {
             const Icon(Icons.no_photography_rounded,
                 size: 64, color: Color(0xFF7C6BE8)),
             const SizedBox(height: 16),
-            Text('No camera detected',
+            Text('Kamera algılanmadı',
                 style: GoogleFonts.inter(
                     color: Colors.white70,
                     fontSize: 18,
@@ -86,8 +87,8 @@ class _NoCameraScreen extends StatelessWidget {
 // Scanner Screen
 // ─────────────────────────────────────────────────────────────────────────────
 class ScannerScreen extends StatefulWidget {
-  final CameraDescription camera;
-  const ScannerScreen({super.key, required this.camera});
+  final List<CameraDescription> cameras;
+  const ScannerScreen({super.key, required this.cameras});
 
   @override
   State<ScannerScreen> createState() => _ScannerScreenState();
@@ -97,7 +98,10 @@ class _ScannerScreenState extends State<ScannerScreen>
     with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   late CameraController _controller;
   late Future<void> _initFuture;
+  late CameraDescription _selectedCamera;
+  
   bool _isLoading = false;
+  XFile? _capturedImage;
 
   late AnimationController _pulseCtrl;
   late Animation<double> _pulseAnim;
@@ -106,6 +110,7 @@ class _ScannerScreenState extends State<ScannerScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _selectedCamera = widget.cameras.first;
     _initCamera();
     _pulseCtrl = AnimationController(
       vsync: this,
@@ -118,12 +123,30 @@ class _ScannerScreenState extends State<ScannerScreen>
 
   void _initCamera() {
     _controller = CameraController(
-      widget.camera,
-      ResolutionPreset.high,
+      _selectedCamera,
+      ResolutionPreset.max,
       enableAudio: false,
       imageFormatGroup: ImageFormatGroup.jpeg,
     );
-    _initFuture = _controller.initialize();
+    _initFuture = _controller.initialize().then((_) {
+      if (mounted) {
+        _controller.setFocusMode(FocusMode.auto);
+      }
+    });
+  }
+
+  Future<void> _onCameraSelected(CameraDescription camera) async {
+    if (_selectedCamera.name == camera.name) return;
+
+    if (_controller.value.isInitialized) {
+      await _controller.dispose();
+    }
+
+    setState(() {
+      _selectedCamera = camera;
+    });
+
+    _initCamera();
   }
 
   @override
@@ -132,8 +155,10 @@ class _ScannerScreenState extends State<ScannerScreen>
     if (state == AppLifecycleState.inactive) {
       _controller.dispose();
     } else if (state == AppLifecycleState.resumed) {
-      _initCamera();
-      setState(() {});
+      if (_capturedImage == null) {
+        _initCamera();
+        setState(() {});
+      }
     }
   }
 
@@ -145,18 +170,34 @@ class _ScannerScreenState extends State<ScannerScreen>
     super.dispose();
   }
 
-  Future<void> _onScanPressed() async {
+  Future<void> _onCapturePressed() async {
     if (_isLoading || !_controller.value.isInitialized) return;
+    try {
+      await _controller.lockCaptureOrientation(DeviceOrientation.portraitUp);
+      final XFile imageFile = await _controller.takePicture();
+      try {
+        await _controller.unlockCaptureOrientation();
+      } catch (_) {}
+      setState(() => _capturedImage = imageFile);
+    } catch (e) {
+      if (mounted) _showErrorSheet('Beklenmeyen Hata', e.toString());
+    }
+  }
+
+  Future<void> _onSendPressed() async {
+    if (_capturedImage == null) return;
     setState(() => _isLoading = true);
     try {
-      final XFile imageFile = await _controller.takePicture();
-      final result = await _uploadImage(imageFile);
-      if (mounted) _showResultSheet(result);
+      final result = await _uploadImage(_capturedImage!);
+      if (mounted) {
+        setState(() => _capturedImage = null);
+        _showResultSheet(result);
+      }
     } on SocketException {
       if (mounted) {
         _showErrorSheet(
-          'Cannot connect to server',
-          'Make sure the backend is running and both devices are on the same Wi-Fi network.\n\nBackend URL:\n$kApiBaseUrl',
+          'Sunucuya Bağlanılamadı',
+          'Arka ucun çalıştığından ve her iki cihazın aynı Wi-Fi ağında olduğundan emin olun.\n\nBackend URL:\n$kApiBaseUrl',
         );
       }
     } on HttpException catch (e) {
@@ -174,19 +215,23 @@ class _ScannerScreenState extends State<ScannerScreen>
                 '• Görüntü net ve odaklanmış olmalı.',
           );
         } else {
-          _showErrorSheet('Server Error', e.message);
+          _showErrorSheet('Sunucu Hatası', e.message);
         }
       }
     } on FormatException {
       if (mounted) {
         _showErrorSheet(
-            'Unexpected Response', 'The server returned an unreadable response.');
+            'Beklenmeyen Yanıt', 'Sunucu okunamayan bir yanıt döndürdü.');
       }
     } catch (e) {
-      if (mounted) _showErrorSheet('Unexpected Error', e.toString());
+      if (mounted) _showErrorSheet('Beklenmeyen Hata', e.toString());
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  void _onRetakePressed() {
+    setState(() => _capturedImage = null);
   }
 
   Future<Map<String, dynamic>> _uploadImage(XFile imageFile) async {
@@ -211,8 +256,8 @@ class _ScannerScreenState extends State<ScannerScreen>
   }
 
   void _showResultSheet(Map<String, dynamic> result) {
-    final roll = result['roll_number']?.toString() ?? 'N/A';
-    final score = result['score']?.toString() ?? 'N/A';
+    final roll = result['roll_number']?.toString() ?? 'Bulunamadı';
+    final score = result['score']?.toString() ?? 'Bulunamadı';
     final List rows = (result['results'] as List?) ?? [];
     final Map<String, dynamic> first =
         rows.isNotEmpty ? (rows.first as Map<String, dynamic>) : {};
@@ -247,22 +292,38 @@ class _ScannerScreenState extends State<ScannerScreen>
         future: _initFuture,
         builder: (context, snap) {
           if (snap.connectionState != ConnectionState.done) {
-            return const _LoadingView(message: 'Initialising camera…');
+            return const _LoadingView(message: 'Kamera başlatılıyor…');
           }
           if (snap.hasError) {
             return Center(
-              child: Text('Camera error:\n${snap.error}',
+              child: Text('Kamera hatası:\n${snap.error}',
                   style: const TextStyle(color: Colors.white70),
                   textAlign: TextAlign.center),
             );
           }
+
+          if (_capturedImage != null) {
+            return _ConfirmView(
+              image: _capturedImage!,
+              onRetake: _onRetakePressed,
+              onSend: _onSendPressed,
+              isLoading: _isLoading,
+            );
+          }
+
           return Stack(
             fit: StackFit.expand,
             children: [
               _FullscreenPreview(controller: _controller),
               const _ScanFrame(),
               Positioned(
-                  top: 0, left: 0, right: 0, child: _TopBar()),
+                top: 0, left: 0, right: 0, 
+                child: _TopBar(
+                  cameras: widget.cameras,
+                  selectedCamera: _selectedCamera,
+                  onCameraSelected: _onCameraSelected,
+                )
+              ),
               Positioned(
                 bottom: 0,
                 left: 0,
@@ -270,10 +331,9 @@ class _ScannerScreenState extends State<ScannerScreen>
                 child: _BottomBar(
                   isLoading: _isLoading,
                   pulseAnim: _pulseAnim,
-                  onScan: _onScanPressed,
+                  onScan: _onCapturePressed,
                 ),
               ),
-              if (_isLoading) const _LoadingOverlay(),
             ],
           );
         },
@@ -285,6 +345,74 @@ class _ScannerScreenState extends State<ScannerScreen>
 // ─────────────────────────────────────────────────────────────────────────────
 // Sub-widgets
 // ─────────────────────────────────────────────────────────────────────────────
+
+class _ConfirmView extends StatelessWidget {
+  final XFile image;
+  final VoidCallback onRetake;
+  final VoidCallback onSend;
+  final bool isLoading;
+
+  const _ConfirmView({
+    required this.image,
+    required this.onRetake,
+    required this.onSend,
+    required this.isLoading,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final bottom = MediaQuery.of(context).padding.bottom;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Image.file(File(image.path), fit: BoxFit.cover),
+        Positioned(
+          bottom: 0, left: 0, right: 0,
+          child: Container(
+            padding: EdgeInsets.only(bottom: bottom + 24, top: 32, left: 24, right: 24),
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.bottomCenter,
+                end: Alignment.topCenter,
+                colors: [Colors.black87, Colors.transparent],
+              )
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: isLoading ? null : onRetake,
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Colors.white54, width: 2),
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    ),
+                    child: Text('Tekrar Çek', style: GoogleFonts.inter(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: isLoading ? null : onSend,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF7C6BE8),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      elevation: 0,
+                    ),
+                    child: Text('Gönder', style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.bold)),
+                  ),
+                ),
+              ],
+            ),
+          )
+        ),
+        if (isLoading) const _LoadingOverlay(),
+      ],
+    );
+  }
+}
 
 class _FullscreenPreview extends StatefulWidget {
   final CameraController controller;
@@ -317,6 +445,7 @@ class _FullscreenPreviewState extends State<_FullscreenPreview>
     final y = details.localPosition.dy / constraints.maxHeight;
 
     try {
+      widget.controller.setFocusMode(FocusMode.auto);
       widget.controller.setFocusPoint(Offset(x, y));
       widget.controller.setExposurePoint(Offset(x, y));
     } catch (_) {}
@@ -330,22 +459,21 @@ class _FullscreenPreviewState extends State<_FullscreenPreview>
   @override
   Widget build(BuildContext context) {
     if (!widget.controller.value.isInitialized) return const SizedBox.shrink();
-    // Use AspectRatio to ensure the entire camera frame is visible without cropping.
-    final previewRatio = widget.controller.value.aspectRatio;
     return Container(
       color: Colors.black,
       child: Center(
         child: AspectRatio(
-          aspectRatio: 1 / previewRatio,
+          aspectRatio: 1 / widget.controller.value.aspectRatio,
           child: LayoutBuilder(
             builder: (context, constraints) {
               return GestureDetector(
                 behavior: HitTestBehavior.opaque,
                 onTapDown: (details) => _onTapDown(details, constraints),
                 child: Stack(
-                  fit: StackFit.expand,
                   children: [
-                    CameraPreview(widget.controller),
+                    Positioned.fill(
+                      child: CameraPreview(widget.controller),
+                    ),
                     if (_tapDownPosition != null)
                       Positioned(
                         left: _tapDownPosition!.dx - 24,
@@ -386,6 +514,16 @@ class _FullscreenPreviewState extends State<_FullscreenPreview>
 }
 
 class _TopBar extends StatelessWidget {
+  final List<CameraDescription> cameras;
+  final CameraDescription selectedCamera;
+  final ValueChanged<CameraDescription> onCameraSelected;
+
+  const _TopBar({
+    required this.cameras,
+    required this.selectedCamera,
+    required this.onCameraSelected,
+  });
+
   @override
   Widget build(BuildContext context) {
     final top = MediaQuery.of(context).padding.top;
@@ -400,6 +538,7 @@ class _TopBar extends StatelessWidget {
       ),
       padding: EdgeInsets.only(top: top + 20, left: 24, right: 24),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
             padding: const EdgeInsets.all(8),
@@ -417,16 +556,44 @@ class _TopBar extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('OMR Scanner',
+              Text('OMR Tarayıcı',
                   style: GoogleFonts.inter(
                       color: Colors.white,
                       fontSize: 18,
                       fontWeight: FontWeight.bold)),
-              Text('Point at a bubble sheet',
+              Text('Optik forma hizalayın',
                   style:
                       GoogleFonts.inter(color: Colors.white54, fontSize: 12)),
             ],
           ),
+          const Spacer(),
+          if (cameras.length > 1)
+            Container(
+              height: 38,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              decoration: BoxDecoration(
+                color: Colors.black45,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.white24)
+              ),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<CameraDescription>(
+                  value: selectedCamera,
+                  dropdownColor: const Color(0xFF14141F),
+                  icon: const Icon(Icons.keyboard_arrow_down, color: Colors.white, size: 20),
+                  style: GoogleFonts.inter(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500),
+                  items: cameras.asMap().entries.map((entry) {
+                    return DropdownMenuItem(
+                      value: entry.value,
+                      child: Text('Kamera ${entry.key + 1}'),
+                    );
+                  }).toList(),
+                  onChanged: (cam) {
+                    if (cam != null) onCameraSelected(cam);
+                  },
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -459,7 +626,7 @@ class _BottomBar extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.end,
         children: [
           Text(
-            isLoading ? 'Evaluating…' : 'Tap to scan & evaluate',
+            'Taramak için dokunun',
             style: GoogleFonts.inter(
                 color: Colors.white54, fontSize: 13, letterSpacing: 0.3),
           ),
@@ -484,7 +651,7 @@ class _BottomBar extends StatelessWidget {
                 child: ElevatedButton.icon(
                   onPressed: isLoading ? null : onScan,
                   icon: const Icon(Icons.qr_code_scanner_rounded, size: 24),
-                  label: Text('SCAN OMR',
+                  label: Text('TARA',
                       style: GoogleFonts.inter(
                           fontSize: 17,
                           fontWeight: FontWeight.w700,
@@ -525,13 +692,13 @@ class _LoadingOverlay extends StatelessWidget {
                 child: CircularProgressIndicator(
                     strokeWidth: 3, color: Color(0xFF7C6BE8))),
             const SizedBox(height: 20),
-            Text('Evaluating sheet…',
+            Text('Okunuyor...',
                 style: GoogleFonts.inter(
                     color: Colors.white,
                     fontSize: 16,
                     fontWeight: FontWeight.w600)),
             const SizedBox(height: 6),
-            Text('This may take a few seconds',
+            Text('Lütfen bekleyin',
                 style:
                     GoogleFonts.inter(color: Colors.white54, fontSize: 13)),
           ],
@@ -662,12 +829,12 @@ class _ResultSheet extends StatelessWidget {
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Scan Complete',
+                        Text('Tarama Tamamlandı',
                             style: GoogleFonts.inter(
                                 color: Colors.white,
                                 fontSize: 18,
                                 fontWeight: FontWeight.bold)),
-                        Text('OMR sheet evaluated successfully',
+                        Text('Optik form başarıyla değerlendirildi',
                             style: GoogleFonts.inter(
                                 color: Colors.white54, fontSize: 12)),
                       ],
@@ -693,7 +860,7 @@ class _ResultSheet extends StatelessWidget {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text('ROLL NUMBER',
+                            Text('ÖĞRENCİ NO',
                                 style: GoogleFonts.inter(
                                     color: Colors.white38,
                                     fontSize: 10,
@@ -717,7 +884,7 @@ class _ResultSheet extends StatelessWidget {
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
-                          Text('SCORE',
+                          Text('NOT',
                               style: GoogleFonts.inter(
                                   color: Colors.white38,
                                   fontSize: 10,
@@ -738,7 +905,7 @@ class _ResultSheet extends StatelessWidget {
                   const SizedBox(height: 16),
                   Align(
                     alignment: Alignment.centerLeft,
-                    child: Text('ANSWERS',
+                    child: Text('CEVAPLAR',
                         style: GoogleFonts.inter(
                             color: Colors.white38,
                             fontSize: 10,
@@ -792,7 +959,7 @@ class _ResultSheet extends StatelessWidget {
                           borderRadius: BorderRadius.circular(16)),
                       elevation: 0,
                     ),
-                    child: Text('Scan Another',
+                    child: Text('Yeni Tara',
                         style: GoogleFonts.inter(
                             fontSize: 16, fontWeight: FontWeight.w600)),
                   ),
@@ -860,7 +1027,7 @@ class _ErrorSheet extends StatelessWidget {
                                   color: Colors.white,
                                   fontSize: 17,
                                   fontWeight: FontWeight.bold)),
-                          Text('Something went wrong',
+                          Text('Bir şeyler yanlış gitti',
                               style: GoogleFonts.inter(
                                   color: Colors.white54, fontSize: 12)),
                         ],
@@ -895,7 +1062,7 @@ class _ErrorSheet extends StatelessWidget {
                           borderRadius: BorderRadius.circular(14)),
                       elevation: 0,
                     ),
-                    child: Text('Dismiss',
+                    child: Text('Kapat',
                         style: GoogleFonts.inter(
                             fontSize: 15, fontWeight: FontWeight.w600)),
                   ),

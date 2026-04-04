@@ -7,7 +7,7 @@ plugins {
 
 android {
     namespace = "com.omrscanner.omr_scanner_app"
-    compileSdk = 35
+    compileSdk = 36
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

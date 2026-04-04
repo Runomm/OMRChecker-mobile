@@ -51,9 +51,13 @@ INPUTS_DIR = BASE_DIR / "inputs"
 OUTPUTS_DIR = BASE_DIR / "outputs"
 MAIN_SCRIPT = BASE_DIR / "main.py"
 
-# Directory that contains template.json (and omr_marker.jpg, config.json, …)
-# These files are copied into inputs/ before every run.
-TEMPLATE_DIR = BASE_DIR / "samples" / "sample1"
+CEVAP_ANAHTARI_DIR = BASE_DIR / "cevap_anahtari"
+SINIF_LISTESI_DIR = BASE_DIR / "sinif_listesi"
+
+CEVAP_ANAHTARI_DIR.mkdir(exist_ok=True)
+SINIF_LISTESI_DIR.mkdir(exist_ok=True)
+
+# Template files (template.json, omr_marker.jpg, config.json) must be statically placed in inputs/
 
 # OMRChecker mirrors the input tree under outputs/, so we glob recursively.
 # e.g. outputs/Results/Results_09AM.csv  OR  outputs/inputs/Results/Results_09AM.csv
@@ -82,47 +86,17 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 
 def _clear_inputs_dir() -> None:
-    """Remove all image/csv files inside inputs/, then copy fresh template files in."""
-    import json as _json
-
+    """Remove previous incoming camera scans from inputs/ without touching template files."""
     INPUTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Remove only image / output files — leave existing template files for now
-    image_exts = {".jpg", ".jpeg", ".png", ".webp"}
+    # Remove prev scans (they are saved as scan.jpg, scan.png, etc) to prevent grading them again
     for item in INPUTS_DIR.iterdir():
-        if item.is_file() and item.suffix.lower() in image_exts:
-            item.unlink()
-            log.info("Deleted stale image: %s", item.name)
-
-    # Copy template support files (template.json, omr_marker.jpg, config.json, …)
-    # from TEMPLATE_DIR into INPUTS_DIR so OMRChecker can find them.
-    template_files = [".json", ".jpg", ".jpeg", ".png"]
-    for src in TEMPLATE_DIR.iterdir():
-        if src.is_file() and src.suffix.lower() in template_files:
-            dst = INPUTS_DIR / src.name
-            shutil.copy2(src, dst)
-            log.info("Copied template file: %s", src.name)
-
-    # --- Headless override ---------------------------------------------------
-    # Always write a config.json that disables all GUI windows.
-    # show_image_level=0  →  OMRChecker never calls cvShowImage.
-    config_dst = INPUTS_DIR / "config.json"
-    headless_config: dict = {"outputs": {"show_image_level": 0}}
-
-    # Preserve display/processing dimensions from the template's config if present
-    template_config_src = TEMPLATE_DIR / "config.json"
-    if template_config_src.exists():
-        try:
-            with open(template_config_src) as f:
-                orig = _json.load(f)
-            if "dimensions" in orig:
-                headless_config["dimensions"] = orig["dimensions"]
-        except Exception:
-            pass  # safe to ignore; OMRChecker uses defaults
-
-    with open(config_dst, "w") as f:
-        _json.dump(headless_config, f, indent=2)
-    log.info("Wrote headless config.json (show_image_level=0)")
+        if item.is_file() and item.name.lower().startswith("scan"):
+            try:
+                item.unlink()
+                log.info("Deleted stale scan image: %s", item.name)
+            except Exception as exc:
+                log.warning("Could not delete stale scan image %s: %s", item.name, exc)
 
 
 def _find_latest_csv() -> Path | None:
@@ -295,49 +269,96 @@ async def evaluate(file: UploadFile = File(..., description="OMR sheet image (JP
             },
         )
 
-    # For convenience: surface the first row's Roll and score at the top level,
-    # and return all rows in the `results` array for multi-sheet batches.
-    first = records[0]
-    roll = first.get("Roll", first.get("roll", "N/A"))
-    score = first.get("score", "N/A")
+    last_row = records[-1]
 
-    # 1 & 2. Find Isim from ogrenciler.csv
-    isim = "Bilinmeyen Ogrenci"
+    # --- 1. Reconstruct Student Number (Ogrenci_No) ---
+    roll_chars = []
+    for i in range(1, 10):
+        val = str(last_row.get(f"H{i}", "")).strip()
+        if not val or val.lower() == "nan":
+            roll_chars.append("-")
+        else:
+            roll_chars.append(val)
+    roll = "".join(roll_chars)
+
+    # --- 2. Read Answer Key ---
+    ans_file = CEVAP_ANAHTARI_DIR / "cevaplar.txt"
+    if not ans_file.exists():
+        log.error("cevaplar.txt is missing!")
+        raise HTTPException(status_code=500, detail="cevap_anahtari/cevaplar.txt bulunamadi.")
+    
     try:
-        ogrenciler_path = BASE_DIR / "ogrenciler.csv"
-        if ogrenciler_path.exists():
-            ogrenciler_df = pd.read_csv(ogrenciler_path, dtype=str)
-            # Ensure safe stripping of whitespace just in case
-            ogrenciler_df.columns = ogrenciler_df.columns.str.strip()
-            if "Ogrenci_No" in ogrenciler_df.columns and "Isim" in ogrenciler_df.columns:
-                match = ogrenciler_df[ogrenciler_df["Ogrenci_No"] == str(roll).strip()]
-                if not match.empty:
-                    isim = match.iloc[0]["Isim"]
+        with open(ans_file, "r", encoding="utf-8") as f:
+            content = f.read()
+            
+        import re
+        parts = re.split(r'[,\n\r]+', content)
+        answer_key = {}
+        for part in parts:
+            part = part.strip()
+            if not part: continue
+            kv = re.split(r'[:\-]', part)
+            if len(kv) >= 2:
+                q = kv[0].strip().upper()
+                if not q.startswith("S"):
+                    q = f"S{q}"
+                ans = kv[1].strip().upper()
+                answer_key[q] = ans
     except Exception as exc:
-        log.warning("Could not read ogrenciler.csv or find student: %s", exc)
+        log.error("Failed to parse cevaplar.txt: %s", exc)
+        raise HTTPException(status_code=500, detail="cevaplar.txt okunamadi veya hatali format.")
 
-    # 3. Append to final_notlar.csv
-    import datetime
-    try:
-        final_file = BASE_DIR / "final_notlar.csv"
-        file_exists = final_file.exists()
-        with open(final_file, "a", encoding="utf-8") as f:
-            if not file_exists:
-                f.write("Ogrenci_No,Isim,Score,Tarih\n")
-            now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            # Replace commas in isim to avoid breaking CSV format
-            safe_isim = str(isim).replace(",", " ")
-            f.write(f"{roll},{safe_isim},{score},{now_str}\n")
-    except Exception as exc:
-        log.error("Could not write to final_notlar.csv: %s", exc)
+    # --- 3. Parse Answers & Grade ---
+    correct_answers_count = 0
+    total_q = len(answer_key) if answer_key else 20
+    
+    for i in range(1, 21):
+        q_key = f"S{i}"
+        val = str(last_row.get(q_key, "")).strip().upper()
+        if val and val.lower() != "nan":
+            if q_key in answer_key and val == answer_key[q_key]:
+                correct_answers_count += 1
+                
+    score = (correct_answers_count / total_q) * 100 if total_q > 0 else 0
+    score = round(score, 2)
 
-    # 4. Include 'isim' in JSON response
+    # --- 5. Update Excel ---
+    isim = "Bilinmiyor"
+    ogrenciler_path = SINIF_LISTESI_DIR / "ogrenciler.xlsx"
+    if ogrenciler_path.exists():
+        try:
+            df = pd.read_excel(ogrenciler_path, dtype=str)
+            df.columns = df.columns.str.strip()
+            
+            # Find student
+            if "Ogrenci_No" in df.columns and "Isim" in df.columns:
+                # Ensure the column doesn't have floating zeroes
+                df["Ogrenci_No"] = df["Ogrenci_No"].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+                match_idx = df.index[df["Ogrenci_No"] == str(roll).strip()].tolist()
+                
+                if match_idx:
+                    idx = match_idx[0]
+                    isim = df.at[idx, "Isim"]
+                    if "Not" not in df.columns:
+                        df["Not"] = ""
+                    df.at[idx, "Not"] = str(score)
+                    df.to_excel(ogrenciler_path, index=False)
+                    log.info("Student %s scored %s and Excel updated.", roll, score)
+                else:
+                    log.warning("Ogrenci_No %s not found in Excel.", roll)
+        except Exception as exc:
+            log.warning("Could not update excel list: %s", exc)
+    else:
+        log.warning("ogrenciler.xlsx not found.")
+
+    # --- 6. JSON Response ---
     return JSONResponse(
         content={
             "status": "ok",
             "roll_number": roll,
             "isim": isim,
             "score": score,
+            "correct_answers_count": correct_answers_count,
             "results": records,
         }
     )

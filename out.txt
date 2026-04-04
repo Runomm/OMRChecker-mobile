@@ -1,0 +1,53 @@
+[21:38:21] INFO     Loading OMRChecker modules...                 __init__.py:5
+[21:38:22] INFO     Loading processors from "src.processors"...   manager.py:53
+           INFO     Loaded processors: ['CropOnMarkers',          manager.py:76
+                    'CropPage', 'FeatureBasedAlignment',                       
+                    'GaussianBlur', 'Levels', 'MedianBlur']                    
+           INFO     Loading config.json: inputs\config.json   validations.py:84
+           INFO     Loading template.json:                    validations.py:49
+                    inputs\template.json                                       
+[21:38:23] INFO     Checking Directories...                          file.py:34
+           INFO     Checking Files...                                file.py:57
+           INFO     Present : appending to                           file.py:92
+                    'outputs\Results\Results_09PM.csv'                         
+           INFO     Present : appending to                           file.py:92
+                    'outputs\Manual\MultiMarkedFiles.csv'                      
+           INFO     Present : appending to                           file.py:92
+                    'outputs\Manual\ErrorFiles.csv'                            
+           INFO                                                     entry.py:53
+                            Current Configurations                             
+             +---------------------------------------------------+             
+             | Directory Path          | inputs                  |             
+             | Count of Images         | 1                       |             
+             | Set Layout Mode         | OFF                     |             
+             | Markers Detection       | ON                      |             
+             | Auto Alignment          | False                   |             
+             | Detected Template Path  | inputs\template.json    |             
+             | Detected Local Config   | inputs\config.json      |             
+             | Detected pre-processors | CropPage, CropOnMarkers |             
+             +---------------------------------------------------+             
+           INFO                                                    entry.py:221
+           INFO     (1) Opening image:      'inputs\scan.jpg'      entry.py:222
+                    Resolution: (1280, 720)                                    
+           INFO     Found page corners:      [[665, 688], [66,   CropPage.py:77
+                    676], [102, 226], [581, 242]]                              
+           ERROR    inputs\scan.jpg                        CropOnMarkers.py:105
+                    Error: No circle found in Quad 3                           
+                             min_matching_threshold 0.3                        
+                    max_matching_variation 0.41     max_t                      
+                    0.2999284         all_max_t 0.4698019                      
+           INFO                                                    entry.py:351
+           INFO     Total file(s) moved        : 0                 entry.py:352
+           INFO     Total file(s) not moved    : 1                 entry.py:353
+           INFO     --------------------------------               entry.py:354
+           INFO     Total file(s) processed    : 1 (Sum Tallied!)  entry.py:355
+           INFO                                                    entry.py:360
+                    Finished Checking 1 file(s) in 1 seconds i.e.              
+                    ~0.0 minute(s).                                            
+           INFO     OMR Processing Rate        :     ~ 1.0         entry.py:363
+                    seconds/OMR                                                
+           INFO     OMR Processing Speed       :     ~ 60.0        entry.py:366
+                    OMRs/minute                                                
+           INFO                                                    entry.py:373
+                    Tip: To see some awesome visuals, open                     
+                    config.json and increase 'show_image_level'                

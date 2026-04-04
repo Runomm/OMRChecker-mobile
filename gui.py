@@ -136,8 +136,10 @@ class OMRDashboard(ctk.CTk):
         try:
             # Run the server silently connecting stdout so we can pipe it
             # sys.executable ensures the same correct virtual environment/python is used
+            base_dir = os.path.dirname(os.path.abspath(__file__))
             self.server_process = subprocess.Popen(
                 [sys.executable, "-m", "uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"],
+                cwd=base_dir,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -197,8 +199,13 @@ class OMRDashboard(ctk.CTk):
             if "Ogrenci_No" not in df.columns or "Isim" not in df.columns:
                 self.log_message("⚠️ Warning: Your file might not have 'Ogrenci_No' or 'Isim' columns. Make sure the headers match exactly!")
 
-            df.to_csv("ogrenciler.csv", index=False)
-            self.log_message("✅ Student list successfully saved as 'ogrenciler.csv' in the project directory.")
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            out_dir = os.path.join(base_dir, "sinif_listesi")
+            os.makedirs(out_dir, exist_ok=True)
+            out_file = os.path.join(out_dir, "ogrenciler.xlsx")
+            
+            df.to_excel(out_file, index=False)
+            self.log_message("✅ Student list successfully saved as 'sinif_listesi/ogrenciler.xlsx'.")
             
         except Exception as e:
             self.log_message(f"❌ Failed to read or save file: {e}")
