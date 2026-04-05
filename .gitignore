@@ -3,9 +3,6 @@
 # Except .github
 !.github/
 
-# Everything in inputs/ and outputs/
-inputs/*
-outputs/*
 
 # Misc
 **/.DS_Store
