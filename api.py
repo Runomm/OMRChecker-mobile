@@ -46,7 +46,11 @@ log = logging.getLogger("omr-api")
 # ---------------------------------------------------------------------------
 # Path constants  — adjust TEMPLATE_DIR to match your sheet design
 # ---------------------------------------------------------------------------
-BASE_DIR = Path(__file__).parent.resolve()
+if getattr(sys, 'frozen', False):
+    BASE_DIR = Path(sys.executable).parent.resolve()
+else:
+    BASE_DIR = Path(__file__).parent.resolve()
+    
 INPUTS_DIR = BASE_DIR / "inputs"
 OUTPUTS_DIR = BASE_DIR / "outputs"
 MAIN_SCRIPT = BASE_DIR / "main.py"
@@ -136,20 +140,27 @@ def _parse_csv(csv_path: Path) -> list[dict[str, Any]]:
 
 async def _run_omrchecker() -> tuple[int, str, str]:
     """
-    Execute `python main.py` as a subprocess and return (returncode, stdout, stderr).
+    Execute OMRChecker as a subprocess and return (returncode, stdout, stderr).
     Runs in a thread pool so the event loop is never blocked.
     """
     log.info("Spawning OMRChecker subprocess…")
 
     loop = asyncio.get_event_loop()
+    
+    if getattr(sys, 'frozen', False):
+        cmd = [sys.executable, "--run-omr"]
+    else:
+        cmd = [sys.executable, str(MAIN_SCRIPT)]
+        
     proc = await loop.run_in_executor(
         None,
         lambda: subprocess.run(
-            [sys.executable, str(MAIN_SCRIPT)],
+            cmd,
             cwd=str(BASE_DIR),
             capture_output=True,
             text=True,
             timeout=120,          # 2-minute hard timeout
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
         ),
     )
     return proc.returncode, proc.stdout, proc.stderr

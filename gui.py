@@ -22,9 +22,17 @@ class OMRDashboard(ctk.CTk):
         self.geometry("750x650")
 
         # Klasör Yapılandırması
+        if getattr(sys, 'frozen', False):
+            self.base_dir = os.path.dirname(sys.executable)
+        else:
+            self.base_dir = os.path.dirname(os.path.abspath(__file__))
+            
         self.paths = {
-            "students": "sinif_listesi/",
-            "answers": "cevap_anahtari/"
+            "inputs": os.path.join(self.base_dir, "inputs"),
+            "outputs_results": os.path.join(self.base_dir, "outputs", "Results"),
+            "outputs_checked": os.path.join(self.base_dir, "outputs", "CheckedOMRs"),
+            "students": os.path.join(self.base_dir, "sinif_listesi"),
+            "answers": os.path.join(self.base_dir, "cevap_anahtari")
         }
         for path in self.paths.values():
             os.makedirs(path, exist_ok=True)
@@ -121,52 +129,51 @@ class OMRDashboard(ctk.CTk):
             self.log_message(f"Cevap anahtarı güncellendi: {os.path.basename(file_path)}")
 
     def toggle_server(self):
-        if self.server_process is None:
-            self.start_server()
-        else:
+        if getattr(self, 'server_process', None) == "running":
             self.stop_server()
+        else:
+            self.start_server()
 
     def start_server(self):
         self.log_message("FastAPI sunucusu başlatılıyor (Port: 8000)...")
         try:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            self.server_process = subprocess.Popen(
-                [sys.executable, "-m", "uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"],
-                cwd=base_dir,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-            )
+            import uvicorn
+            from api import app as fastapi_app
+            
+            # Use 0.0.0.0 ensures mobile connectivity on the LAN. log_config=None prevents crash in PyInstaller windowed mode
+            config = uvicorn.Config(fastapi_app, host="0.0.0.0", port=8000, log_level="info", log_config=None)
+            self.uvicorn_server = uvicorn.Server(config)
+            
+            def run_server():
+                import asyncio
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                self.uvicorn_server.run()
 
-            self.btn_server.configure(text="SUNUCUYU DURDUR", fg_color="#e74c3c", hover_color="#c0392b")
-            self.server_thread = threading.Thread(target=self.capture_server_logs, daemon=True)
+            self.server_thread = threading.Thread(target=run_server, daemon=True)
             self.server_thread.start()
-            self.log_message("✅ Sunucu başarıyla başlatıldı.")
+            self.server_process = "running"
+            
+            self.btn_server.configure(text="SUNUCUYU DURDUR", fg_color="#e74c3c", hover_color="#c0392b")
+            self.log_message("✅ Sunucu başlatıldı (Loglar konsola yönlendirilmiyor zira dahili çalışıyor).")
         except Exception as e:
             self.log_message(f"❌ Sunucu başlatılamadı: {e}")
 
     def stop_server(self):
-        if self.server_process:
+        if hasattr(self, 'uvicorn_server') and self.server_process == "running":
             self.log_message("Sunucu durduruluyor...")
-            self.server_process.terminate()
-            self.server_process.wait()
+            self.uvicorn_server.should_exit = True
             self.server_process = None
             
             self.btn_server.configure(text="SUNUCUYU BAŞLAT", fg_color="green", hover_color="#228B22")
             self.log_message("🛑 Sunucu durduruldu.")
 
     def capture_server_logs(self):
-        if not self.server_process: return
-        for line in iter(self.server_process.stdout.readline, ""):
-            if line:
-                self.after(0, self.log_message, line.strip())
-            else:
-                break
+        pass
 
     def run_manual_test(self):
         """inputs klasöründeki dosyaları kullanarak manuel OMR testini tetikler."""
-        inputs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "inputs")
+        inputs_dir = self.paths["inputs"]
         files = [f for f in os.listdir(inputs_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg')) and not f.startswith('omr_marker')]
         if not files:
             self.log_message("⚠️ 'inputs/' klasöründe test edilecek görüntü bulunamadı.")
@@ -176,9 +183,14 @@ class OMRDashboard(ctk.CTk):
         
         def process_test():
             try:
-                base_dir = os.path.dirname(os.path.abspath(__file__))
+                base_dir = self.base_dir
+                if getattr(sys, 'frozen', False):
+                    cmd = [sys.executable, "--run-omr"]
+                else:
+                    cmd = [sys.executable, "main.py"]
+                    
                 proc = subprocess.Popen(
-                    [sys.executable, "main.py"],
+                    cmd,
                     cwd=base_dir,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
@@ -207,7 +219,7 @@ class OMRDashboard(ctk.CTk):
             import pandas as pd
             import glob, re
             
-            base_dir = os.path.dirname(os.path.abspath(__file__))
+            base_dir = self.base_dir
             outputs_dir = os.path.join(base_dir, "outputs")
             
             # 1. En son CSV'yi bul
@@ -341,6 +353,19 @@ class OMRDashboard(ctk.CTk):
             return False
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--run-omr":
+        import main
+        sys.exit(main.entry_point_for_args({
+            "input_paths": ["inputs"],
+            "debug": False,
+            "output_dir": "outputs",
+            "autoAlign": False,
+            "setLayout": False
+        }))
+
+    import multiprocessing
+    multiprocessing.freeze_support()
+
     app = OMRDashboard()
     def on_closing():
         app.stop_server()

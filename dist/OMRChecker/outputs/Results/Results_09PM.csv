@@ -1,0 +1,4 @@
+"file_id","input_path","output_path","score","H1","H2","H3","H4","H5","H6","H7","H8","H9","S1","S2","S3","S4","S5","S6","S7","S8","S9","S10","S11","S12","S13","S14","S15","S16","S17","S18","S19","S20"
+"scan.jpg","inputs\scan.jpg","outputs\CheckedOMRs\scan.jpg","0","2","4","5","5","4","1","0","2","3","A","B","C","D","E","A","B","C","","","","","","","","","","","",""
+"scan.jpg","inputs\scan.jpg","outputs\CheckedOMRs\scan.jpg","0","2","4","5","5","4","1","0","2","3","A","B","C","D","E","A","B","C","","","","","","","","","","","",""
+"scan.jpg","inputs\scan.jpg","outputs\CheckedOMRs\scan.jpg","0","2","4","5","5","4","1","0","2","3","A","B","C","D","E","A","B","C","","","","","","","","","","","",""
