@@ -272,94 +272,108 @@ async def evaluate(file: UploadFile = File(..., description="OMR sheet image (JP
     last_row = records[-1]
 
     # --- 1. Reconstruct Student Number (Ogrenci_No) ---
-    roll_chars = []
-    for i in range(1, 10):
-        val = str(last_row.get(f"H{i}", "")).strip()
-        if not val or val.lower() == "nan":
-            roll_chars.append("-")
-        else:
-            roll_chars.append(val)
-    roll = "".join(roll_chars)
+    roll = str(last_row.get("Roll", last_row.get("roll", ""))).strip()
+    if not roll or roll.lower() == "nan":
+        roll_chars = []
+        for i in range(1, 10):
+            val = str(last_row.get(f"H{i}", "")).strip()
+            # In cases where H1-H9 have marks, collect them
+            if val and val.lower() != "nan":
+                roll_chars.append(val)
+        roll = "".join(roll_chars)
+        
+    if not roll:
+        raise HTTPException(status_code=400, detail="Öğrenci numarası (Ogrenci_No) OMR kağıdında algılanamadı.")
 
-    # --- 2. Read Answer Key ---
+    # --- 2. Evaluate Student in Excel ---
+    ogrenciler_path = SINIF_LISTESI_DIR / "ogrenciler.xlsx"
+    if not ogrenciler_path.exists():
+        log.error("ogrenciler.xlsx is missing!")
+        raise HTTPException(status_code=500, detail="sinif_listesi/ogrenciler.xlsx bulunamadı.")
+        
+    try:
+        df = pd.read_excel(ogrenciler_path, dtype=str)
+        df.columns = df.columns.str.strip()
+    except Exception as exc:
+        log.error("Failed to read Excel: %s", exc)
+        raise HTTPException(status_code=500, detail="ogrenciler.xlsx okunamadı.")
+        
+    if "Ogrenci_No" not in df.columns or "Ad_Soyad" not in df.columns:
+        raise HTTPException(status_code=500, detail="Excel dosyasında 'Ogrenci_No' veya 'Ad_Soyad' sütunu eksik.")
+
+    df["Ogrenci_No"] = df["Ogrenci_No"].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+    match_idx = df.index[df["Ogrenci_No"] == str(roll).strip()].tolist()
+    
+    if not match_idx:
+        raise HTTPException(status_code=404, detail=f"{roll} no lu öğrenci bulunamadı")
+        
+    idx = match_idx[0]
+    ad_soyad = df.at[idx, "Ad_Soyad"]
+
+    # --- 3. Read Answer Key ---
     ans_file = CEVAP_ANAHTARI_DIR / "cevaplar.txt"
     if not ans_file.exists():
         log.error("cevaplar.txt is missing!")
-        raise HTTPException(status_code=500, detail="cevap_anahtari/cevaplar.txt bulunamadi.")
+        raise HTTPException(status_code=500, detail="cevap_anahtari/cevaplar.txt bulunamadı.")
     
     try:
         with open(ans_file, "r", encoding="utf-8") as f:
-            content = f.read()
+            content = f.read().strip()
             
         import re
-        parts = re.split(r'[,\n\r]+', content)
-        answer_key = {}
-        for part in parts:
-            part = part.strip()
-            if not part: continue
-            kv = re.split(r'[:\-]', part)
-            if len(kv) >= 2:
-                q = kv[0].strip().upper()
-                if not q.startswith("S"):
-                    q = f"S{q}"
-                ans = kv[1].strip().upper()
-                answer_key[q] = ans
+        if ":" in content or "-" in content:
+            # Parse format like "1:A, 2:B" or "1-A"
+            parts = re.split(r'[,\n\r]+', content)
+            ans_dict = {}
+            for part in parts:
+                part = part.strip()
+                if not part: continue
+                kv = re.split(r'[:\-]', part)
+                if len(kv) >= 2:
+                    q_num = re.sub(r'\D', '', kv[0])
+                    if q_num:
+                        ans_dict[int(q_num)] = kv[1].strip().upper()
+            # Convert to a flat 20-character string for uniform grading
+            answer_key = "".join(ans_dict.get(i, "X") for i in range(1, 21))
+        else:
+            # Parse format like "ABCDEABCDE"
+            answer_key = re.sub(r'\s+', '', content).upper()
+            
     except Exception as exc:
-        log.error("Failed to parse cevaplar.txt: %s", exc)
-        raise HTTPException(status_code=500, detail="cevaplar.txt okunamadi veya hatali format.")
+        log.error("Failed to read cevaplar.txt: %s", exc)
+        raise HTTPException(status_code=500, detail="cevaplar.txt okunamadı veya format hatalı.")
 
-    # --- 3. Parse Answers & Grade ---
+    # --- 4. Parse Answers & Grade (20 questions, 5 points each) ---
     correct_answers_count = 0
-    total_q = len(answer_key) if answer_key else 20
+    total_q = min(len(answer_key), 20)
     
-    for i in range(1, 21):
-        q_key = f"S{i}"
-        val = str(last_row.get(q_key, "")).strip().upper()
-        if val and val.lower() != "nan":
-            if q_key in answer_key and val == answer_key[q_key]:
-                correct_answers_count += 1
-                
-    score = (correct_answers_count / total_q) * 100 if total_q > 0 else 0
-    score = round(score, 2)
+    for i in range(total_q):
+        q_key_S = f"S{i+1}"
+        q_key_q = f"q{i+1}"
+        val = str(last_row.get(q_key_S, last_row.get(q_key_q, ""))).strip().upper()
+        if val and val.lower() != "nan" and val == answer_key[i]:
+            correct_answers_count += 1
+            
+    score = correct_answers_count * 5
 
     # --- 5. Update Excel ---
-    isim = "Bilinmiyor"
-    ogrenciler_path = SINIF_LISTESI_DIR / "ogrenciler.xlsx"
-    if ogrenciler_path.exists():
-        try:
-            df = pd.read_excel(ogrenciler_path, dtype=str)
-            df.columns = df.columns.str.strip()
-            
-            # Find student
-            if "Ogrenci_No" in df.columns and "Isim" in df.columns:
-                # Ensure the column doesn't have floating zeroes
-                df["Ogrenci_No"] = df["Ogrenci_No"].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
-                match_idx = df.index[df["Ogrenci_No"] == str(roll).strip()].tolist()
-                
-                if match_idx:
-                    idx = match_idx[0]
-                    isim = df.at[idx, "Isim"]
-                    if "Not" not in df.columns:
-                        df["Not"] = ""
-                    df.at[idx, "Not"] = str(score)
-                    df.to_excel(ogrenciler_path, index=False)
-                    log.info("Student %s scored %s and Excel updated.", roll, score)
-                else:
-                    log.warning("Ogrenci_No %s not found in Excel.", roll)
-        except Exception as exc:
-            log.warning("Could not update excel list: %s", exc)
-    else:
-        log.warning("ogrenciler.xlsx not found.")
+    if "Not" not in df.columns:
+        df["Not"] = ""
+    df.at[idx, "Not"] = str(score)
+    df.to_excel(ogrenciler_path, index=False)
+    log.info("Student %s (%s) scored %s. Excel updated.", roll, ad_soyad, score)
 
-    # --- 6. JSON Response ---
+    # --- 6. JSON Response Formulation ---
+    # The UI will ONLY read 'Sonuç' via the extras mapping since we drop raw column dumps.
+    success_message = f"{roll} numaralı, {ad_soyad}'ın notu işlendi: {score}"
+    
     return JSONResponse(
         content={
             "status": "ok",
             "roll_number": roll,
-            "isim": isim,
+            "Ad_Soyad": ad_soyad,
             "score": score,
-            "correct_answers_count": correct_answers_count,
-            "results": records,
+            "results": [{"Sonuç": success_message}],
         }
     )
 

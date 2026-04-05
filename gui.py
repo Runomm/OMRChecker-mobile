@@ -1,129 +1,124 @@
 import ctypes
 import os
+import shutil
 import socket
 import subprocess
+import sys
 import threading
-from tkinter import filedialog
+import tkinter as tk
+from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
-import pandas as pd
 
+# Tema Ayarları
 ctk.set_appearance_mode("Dark")
-ctk.set_default_color_theme("green")
+ctk.set_default_color_theme("blue")
 
 class OMRDashboard(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("OMRChecker Control Panel")
+        self.title("OMRChecker - Akıllı Optik Okuma Sistemi")
         self.geometry("750x650")
-        self.resizable(False, False)
+
+        # Klasör Yapılandırması
+        self.paths = {
+            "students": "sinif_listesi/",
+            "answers": "cevap_anahtari/"
+        }
+        for path in self.paths.values():
+            os.makedirs(path, exist_ok=True)
 
         # Server state
         self.server_process = None
         self.server_thread = None
 
-        # --- Grid Layout Setup ---
-        self.grid_rowconfigure(2, weight=1)
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_columnconfigure(1, weight=1)
-
-        # --- HEADER: IP Display ---
-        self.header_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.header_frame.grid(row=0, column=0, columnspan=2, padx=20, pady=(20, 10), sticky="ew")
-
-        self.ip_label = ctk.CTkLabel(
-            self.header_frame, 
-            text="Detecting IP...", 
-            font=ctk.CTkFont(family="Inter", size=24, weight="bold"),
-            text_color="#9D8FFF"
-        )
-        self.ip_label.pack(pady=5)
-        
-        self.sub_label = ctk.CTkLabel(
-            self.header_frame,
-            text="Enter this IP in the Mobile App to connect securely",
-            font=ctk.CTkFont(size=14),
-            text_color="gray"
-        )
-        self.sub_label.pack()
-
-        # Update IP immediately
+        self.setup_ui()
         self.update_ip_display()
 
-        # --- MIDDLE: Action Buttons ---
-        self.actions_frame = ctk.CTkFrame(self)
-        self.actions_frame.grid(row=1, column=0, columnspan=2, padx=20, pady=10, sticky="ew")
-        self.actions_frame.grid_columnconfigure((0, 1, 2), weight=1)
+    def setup_ui(self):
+        # Başlık ve IP
+        self.header_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.header_frame.pack(pady=(20, 10), fill="x")
+        
+        self.label = ctk.CTkLabel(self.header_frame, text="OMR Kontrol Paneli", font=ctk.CTkFont(size=24, weight="bold"))
+        self.label.pack()
+        
+        self.ip_label = ctk.CTkLabel(self.header_frame, text="IP Tespit Ediliyor...", font=ctk.CTkFont(size=14, weight="bold"), text_color="#3498db")
+        self.ip_label.pack()
 
-        # 1. Server Start/Stop Button
-        self.btn_server = ctk.CTkButton(
-            self.actions_frame, 
-            text="START SERVER",
-            font=ctk.CTkFont(size=16, weight="bold"),
-            height=60,
-            corner_radius=15,
-            fg_color="#2ecc71",
-            hover_color="#27ae60",
-            command=self.toggle_server
-        )
-        self.btn_server.grid(row=0, column=0, padx=10, pady=20, sticky="ew")
+        # --- Sunucu Kontrol Bölümü ---
+        self.server_frame = ctk.CTkFrame(self)
+        self.server_frame.pack(pady=10, padx=20, fill="x")
 
-        # 2. Firewall Setup Button
-        self.btn_firewall = ctk.CTkButton(
-            self.actions_frame, 
-            text="Setup Firewall Rule",
-            font=ctk.CTkFont(size=14, weight="bold"),
-            height=60,
-            corner_radius=15,
-            fg_color="#e67e22",
-            hover_color="#d35400",
-            command=self.setup_firewall
-        )
-        self.btn_firewall.grid(row=0, column=1, padx=10, pady=20, sticky="ew")
+        self.btn_server = ctk.CTkButton(self.server_frame, text="SUNUCUYU BAŞLAT", fg_color="green", hover_color="#228B22", command=self.toggle_server)
+        self.btn_server.pack(side="left", padx=10, pady=15, expand=True)
 
-        # 3. Student List Loader Button
-        self.btn_upload = ctk.CTkButton(
-            self.actions_frame, 
-            text="Select Student List",
-            font=ctk.CTkFont(size=14, weight="bold"),
-            height=60,
-            corner_radius=15,
-            fg_color="#3498db",
-            hover_color="#2980b9",
-            command=self.load_student_file
-        )
-        self.btn_upload.grid(row=0, column=2, padx=10, pady=20, sticky="ew")
+        self.btn_manual_test = ctk.CTkButton(self.server_frame, text="MANUEL TEST", fg_color="#3498db", hover_color="#2980b9", command=self.run_manual_test)
+        self.btn_manual_test.pack(side="left", padx=10, pady=15, expand=True)
 
-        # --- BOTTOM: Log Console ---
-        self.console_label = ctk.CTkLabel(self, text="Live System Logs", font=ctk.CTkFont(size=16, weight="bold"))
-        self.console_label.grid(row=2, column=0, columnspan=2, padx=20, pady=(10, 0), sticky="w")
+        self.btn_firewall = ctk.CTkButton(self.server_frame, text="FIREWALL İZNİ VER", command=self.setup_firewall)
+        self.btn_firewall.pack(side="left", padx=10, pady=15, expand=True)
 
-        self.console = ctk.CTkTextbox(self, state="disabled", font=ctk.CTkFont(family="Consolas", size=13))
-        self.console.grid(row=3, column=0, columnspan=2, padx=20, pady=(5, 20), sticky="nsew")
-        self.grid_rowconfigure(3, weight=1)
+        # --- Dosya Yükleme Bölümü ---
+        self.upload_frame = ctk.CTkFrame(self)
+        self.upload_frame.pack(pady=10, padx=20, fill="x")
 
-        self.log_message("System Ready.")
+        # Öğrenci Listesi
+        self.btn_student = ctk.CTkButton(self.upload_frame, text="Öğrenci Listesini Yükle (.xlsx)", command=self.upload_students)
+        self.btn_student.pack(pady=10, padx=20, fill="x")
+        self.lbl_student_status = ctk.CTkLabel(self.upload_frame, text="Durum: Liste bekleniyor...", font=ctk.CTkFont(size=12))
+        self.lbl_student_status.pack()
+
+        # Cevap Anahtarı
+        self.btn_answer = ctk.CTkButton(self.upload_frame, text="Cevap Anahtarını Yükle (.txt)", command=self.upload_answers)
+        self.btn_answer.pack(pady=10, padx=20, fill="x")
+        self.lbl_answer_status = ctk.CTkLabel(self.upload_frame, text="Durum: Anahtar bekleniyor...", font=ctk.CTkFont(size=12))
+        self.lbl_answer_status.pack()
+
+        # --- Log Console ---
+        self.console_label = ctk.CTkLabel(self, text="Sistem Kayıtları", font=ctk.CTkFont(size=14, weight="bold"))
+        self.console_label.pack(anchor="w", padx=20)
+
+        self.console = ctk.CTkTextbox(self, state="disabled", font=ctk.CTkFont(family="Consolas", size=12))
+        self.console.pack(padx=20, pady=(5, 10), fill="both", expand=True)
+
+        self.log_message("Sistem Hazır.")
 
     def log_message(self, message):
-        """Append message to console safely from any thread."""
+        """Mesajı konsola yazar."""
         self.console.configure(state="normal")
         self.console.insert("end", f">  {message}\n")
         self.console.see("end")
         self.console.configure(state="disabled")
 
     def update_ip_display(self):
-        """Detect local active IPv4 and update the user interface."""
+        """Yerel IP tespit edip ekrana yazdırır."""
         local_ip = "127.0.0.1"
         try:
-            # Use UDP to connect to an external IP to cleanly detect the active outgoing interface IP
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.connect(("8.8.8.8", 80))
             local_ip = s.getsockname()[0]
             s.close()
         except:
             pass
-        self.ip_label.configure(text=f"Server IP: {local_ip}:8000")
+        self.ip_label.configure(text=f"Mobil Uygulama Bağlantı IP: {local_ip}:8000")
+
+    def upload_students(self):
+        file_path = filedialog.askopenfilename(filetypes=[("Excel Files", "*.xlsx")])
+        if file_path:
+            target = os.path.join(self.paths["students"], "ogrenciler.xlsx")
+            shutil.copy(file_path, target)
+            self.lbl_student_status.configure(text=f"✅ Başarıyla Yüklendi: {os.path.basename(file_path)}", text_color="green")
+            self.log_message(f"Öğrenci listesi güncellendi: {os.path.basename(file_path)}")
+
+    def upload_answers(self):
+        file_path = filedialog.askopenfilename(filetypes=[("Text Files", "*.txt")])
+        if file_path:
+            target = os.path.join(self.paths["answers"], "cevaplar.txt")
+            shutil.copy(file_path, target)
+            self.lbl_answer_status.configure(text=f"✅ Başarıyla Yüklendi: {os.path.basename(file_path)}", text_color="green")
+            self.log_message(f"Cevap anahtarı güncellendi: {os.path.basename(file_path)}")
 
     def toggle_server(self):
         if self.server_process is None:
@@ -132,10 +127,8 @@ class OMRDashboard(ctk.CTk):
             self.stop_server()
 
     def start_server(self):
-        self.log_message("Starting FastAPI server on Port 8000...")
+        self.log_message("FastAPI sunucusu başlatılıyor (Port: 8000)...")
         try:
-            # Run the server silently connecting stdout so we can pipe it
-            # sys.executable ensures the same correct virtual environment/python is used
             base_dir = os.path.dirname(os.path.abspath(__file__))
             self.server_process = subprocess.Popen(
                 [sys.executable, "-m", "uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"],
@@ -146,99 +139,200 @@ class OMRDashboard(ctk.CTk):
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
             )
 
-            self.btn_server.configure(text="STOP SERVER", fg_color="#e74c3c", hover_color="#c0392b")
-            
-            # Start background thread to capture logs
+            self.btn_server.configure(text="SUNUCUYU DURDUR", fg_color="#e74c3c", hover_color="#c0392b")
             self.server_thread = threading.Thread(target=self.capture_server_logs, daemon=True)
             self.server_thread.start()
-
-            self.log_message("✅ Server successfully started.")
-
+            self.log_message("✅ Sunucu başarıyla başlatıldı.")
         except Exception as e:
-            self.log_message(f"❌ Failed to start server: {e}")
+            self.log_message(f"❌ Sunucu başlatılamadı: {e}")
 
     def stop_server(self):
         if self.server_process:
-            self.log_message("Stopping server...")
+            self.log_message("Sunucu durduruluyor...")
             self.server_process.terminate()
             self.server_process.wait()
             self.server_process = None
             
-            self.btn_server.configure(text="START SERVER", fg_color="#2ecc71", hover_color="#27ae60")
-            self.log_message("🛑 Server stopped.")
+            self.btn_server.configure(text="SUNUCUYU BAŞLAT", fg_color="green", hover_color="#228B22")
+            self.log_message("🛑 Sunucu durduruldu.")
 
     def capture_server_logs(self):
-        """Read standard output from the Uvicorn terminal and post it to our UI log box."""
         if not self.server_process: return
         for line in iter(self.server_process.stdout.readline, ""):
             if line:
-                # Strip newlines at the end
                 self.after(0, self.log_message, line.strip())
             else:
                 break
 
-    def load_student_file(self):
-        """Show file dialog and parse the selected Excel/CSV, save as ogrenciler.csv."""
-        filepath = filedialog.askopenfilename(
-            title="Sınıf Listesini Seç",
-            filetypes=[("Excel ve CSV dosyaları", "*.xlsx *.csv")]
-        )
-        
-        if not filepath:
+    def run_manual_test(self):
+        """inputs klasöründeki dosyaları kullanarak manuel OMR testini tetikler."""
+        inputs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "inputs")
+        files = [f for f in os.listdir(inputs_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg')) and not f.startswith('omr_marker')]
+        if not files:
+            self.log_message("⚠️ 'inputs/' klasöründe test edilecek görüntü bulunamadı.")
             return
 
-        self.log_message(f"Loading student list from: {os.path.basename(filepath)}...")
+        self.log_message("🔄 Manuel test başlatılıyor... ('inputs/' içindeki dosyalar OMR motoruna gönderildi)")
+        
+        def process_test():
+            try:
+                base_dir = os.path.dirname(os.path.abspath(__file__))
+                proc = subprocess.Popen(
+                    [sys.executable, "main.py"],
+                    cwd=base_dir,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                )
+                for line in iter(proc.stdout.readline, ""):
+                    if line:
+                        self.after(0, self.log_message, line.strip())
+                    else:
+                        break
+                proc.wait()
+                if proc.returncode == 0:
+                    self.log_message("✅ OMR Motoru tamamlandı. Notlandırma ve Excel işlemleri uygulanıyor...")
+                    self.after(0, self.apply_grading_logic)
+                else:
+                    self.log_message(f"❌ Test başarısız oldu (Hata Kodu: {proc.returncode}).")
+            except Exception as e:
+                self.after(0, self.log_message, f"❌ Test çalıştırılamadı: {e}")
 
+        threading.Thread(target=process_test, daemon=True).start()
+
+    def apply_grading_logic(self):
+        """Son üretilen CSV'yi okuyarak cevap anahtarı eşleşmesini yapar ve Excel'i günceller."""
         try:
-            if filepath.endswith('.csv'):
-                df = pd.read_csv(filepath)
-            else:
-                df = pd.read_excel(filepath)
+            import pandas as pd
+            import glob, re
             
-            # Simple check if required columns exist (to help the user)
-            if "Ogrenci_No" not in df.columns or "Isim" not in df.columns:
-                self.log_message("⚠️ Warning: Your file might not have 'Ogrenci_No' or 'Isim' columns. Make sure the headers match exactly!")
-
             base_dir = os.path.dirname(os.path.abspath(__file__))
-            out_dir = os.path.join(base_dir, "sinif_listesi")
-            os.makedirs(out_dir, exist_ok=True)
-            out_file = os.path.join(out_dir, "ogrenciler.xlsx")
+            outputs_dir = os.path.join(base_dir, "outputs")
             
-            df.to_excel(out_file, index=False)
-            self.log_message("✅ Student list successfully saved as 'sinif_listesi/ogrenciler.xlsx'.")
+            # 1. En son CSV'yi bul
+            matches = glob.glob(os.path.join(outputs_dir, "**", "Results_*.csv"), recursive=True)
+            if not matches:
+                self.log_message("❌ outputs/ altında Results_ CSV dosyası bulunamadı.")
+                return
+                
+            csv_path = max(matches, key=os.path.getmtime)
+            df_res = pd.read_csv(csv_path, dtype=str).fillna("")
+            if df_res.empty: return
             
+            records = df_res.to_dict(orient="records")
+            last_row = records[-1]
+            
+            # --- Öğrenci No Çıkarımı ---
+            roll = str(last_row.get("Roll", last_row.get("roll", ""))).strip()
+            if not roll or roll.lower() == "nan":
+                roll_chars = []
+                for i in range(1, 10):
+                    val = str(last_row.get(f"H{i}", "")).strip()
+                    if val and val.lower() != "nan":
+                        roll_chars.append(val)
+                roll = "".join(roll_chars)
+                
+            if not roll:
+                self.log_message("❌ Uyarı: Öğrenci Numarası optik okuyucuda algılanamadı.")
+                return
+
+            # --- Excel Eşleşmesi ---
+            ogrenciler_path = os.path.join(base_dir, "sinif_listesi", "ogrenciler.xlsx")
+            if not os.path.exists(ogrenciler_path):
+                self.log_message("❌ sinif_listesi/ogrenciler.xlsx bulunamadı.")
+                return
+                
+            df = pd.read_excel(ogrenciler_path, dtype=str)
+            df.columns = df.columns.str.strip()
+            if "Ogrenci_No" not in df.columns or "Ad_Soyad" not in df.columns:
+                self.log_message("❌ Excel'de 'Ogrenci_No' veya 'Ad_Soyad' sütunu eksik.")
+                return
+
+            df["Ogrenci_No"] = df["Ogrenci_No"].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+            match_idx = df.index[df["Ogrenci_No"] == str(roll).strip()].tolist()
+            
+            if not match_idx:
+                self.log_message(f"❌ {roll} numaralı öğrenci listesinde bulunamadı!")
+                return
+                
+            idx = match_idx[0]
+            ad_soyad = df.at[idx, "Ad_Soyad"]
+            
+            # --- Cevap Anahtarı Okuma ---
+            ans_file = os.path.join(base_dir, "cevap_anahtari", "cevaplar.txt")
+            if not os.path.exists(ans_file):
+                self.log_message("❌ cevap_anahtari/cevaplar.txt bulunamadı.")
+                return
+                
+            with open(ans_file, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                
+            if ":" in content or "-" in content:
+                parts = re.split(r'[,\n\r]+', content)
+                ans_dict = {}
+                for part in parts:
+                    part = part.strip()
+                    if not part: continue
+                    kv = re.split(r'[:\-]', part)
+                    if len(kv) >= 2:
+                        q_num = re.sub(r'\D', '', kv[0])
+                        if q_num:
+                            ans_dict[int(q_num)] = kv[1].strip().upper()
+                answer_key = "".join(ans_dict.get(i, "X") for i in range(1, 21))
+            else:
+                answer_key = re.sub(r'\s+', '', content).upper()
+                
+            # --- Puan Hesaplama ---
+            correct_answers_count = 0
+            total_q = min(len(answer_key), 20)
+            
+            for i in range(total_q):
+                val = str(last_row.get(f"S{i+1}", last_row.get(f"q{i+1}", ""))).strip().upper()
+                if val and val.lower() != "nan" and val == answer_key[i]:
+                    correct_answers_count += 1
+                    
+            score = correct_answers_count * 5
+            
+            # --- Excel Güncelleme ---
+            if "Not" not in df.columns:
+                df["Not"] = ""
+            df.at[idx, "Not"] = str(score)
+            df.to_excel(ogrenciler_path, index=False)
+            
+            self.log_message(f"📝 BAŞARILI: {roll} numaralı {ad_soyad} işlendi. Notu: {score}")
+
         except Exception as e:
-            self.log_message(f"❌ Failed to read or save file: {e}")
+            self.log_message(f"❌ Değerlendirme sırasında bir hata oluştu: {e}")
 
     def setup_firewall(self):
-        """Try running the netsh firewall rule. If this isn't elevated, ask for elevation."""
-        self.log_message("Attempting to add Firewall Rule...")
-        
-        rule_name = "OMR Hackathon Port 8000"
+        self.log_message("Güvenlik duvarı kuralı eklenmeye çalışılıyor...")
+        rule_name = "OMR Checker API Port 8000"
         
         if self.is_admin():
             self._run_firewall_cmd(rule_name)
         else:
-            self.log_message("Admin privileges required. Please accept the popup prompt.")
-            # Elevate our request directly for netsh 
+            self.log_message("Yönetici izni gerekiyor. Lütfen gelen uyarıyı onaylayın.")
             cmd = "netsh"
             args = f'advfirewall firewall add rule name="{rule_name}" dir=in action=allow protocol=TCP localport=8000'
             try:
-                ret = ctypes.windll.shell32.ShellExecuteW(None, "runas", cmd, args, None, 1) # 1 = SW_SHOWNORMAL
+                ret = ctypes.windll.shell32.ShellExecuteW(None, "runas", cmd, args, None, 1)
                 if int(ret) > 32:
-                    self.log_message("✅ Administrator prompt opened. If approved, the rule was added successfully.")
+                    self.log_message("✅ Yönetici onayı alındı. İzin verildi ise kural eklendi.")
                 else:
-                    self.log_message(f"❌ Failed to request elevation. Error code: {ret}")
+                    self.log_message(f"❌ Yönetici izni alınamadı (Hata: {ret})")
             except Exception as e:
-                self.log_message(f"❌ Elevated execution failed: {e}")
+                self.log_message(f"❌ İstisna oluştu: {e}")
 
     def _run_firewall_cmd(self, rule_name):
         try:
             cmd = f'netsh advfirewall firewall add rule name="{rule_name}" dir=in action=allow protocol=TCP localport=8000'
             subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True, shell=True)
-            self.log_message("✅ Firewall rule successfully added!")
+            self.log_message("✅ Güvenlik duvarı kuralı başarıyla eklendi!")
+            messagebox.showinfo("Firewall", "Güvenlik duvarı izni başarıyla verildi.")
         except subprocess.CalledProcessError as e:
-            self.log_message(f"❌ Could not add firewall rule: {e.stderr}")
+            self.log_message(f"❌ Güvenlik duvarı kuralı eklenemedi: {e.stderr}")
+            messagebox.showerror("Hata", "Güvenlik duvarı izni verilemedi.")
 
     def is_admin(self):
         try:
@@ -247,9 +341,7 @@ class OMRDashboard(ctk.CTk):
             return False
 
 if __name__ == "__main__":
-    import sys
     app = OMRDashboard()
-    # Clean shutdown on closing window
     def on_closing():
         app.stop_server()
         app.destroy()

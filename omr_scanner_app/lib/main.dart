@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
+import 'package:image_cropper/image_cropper.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ⚙️  CONFIG — backend machine's LAN IP
@@ -110,6 +111,27 @@ class _ScannerScreenState extends State<ScannerScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Lütfen arka planın tek renk ve düz beyaz olmasına özen gösterin; kırpma işlemini buna göre yapın.',
+              style: GoogleFonts.inter(fontSize: 14),
+            ),
+            backgroundColor: const Color(0xFF7C6BE8),
+            duration: const Duration(seconds: 8),
+            action: SnackBarAction(
+              label: 'Tamam',
+              textColor: Colors.white,
+              onPressed: () {},
+            ),
+          ),
+        );
+      }
+    });
+
     _selectedCamera = widget.cameras.first;
     _initCamera();
     _pulseCtrl = AnimationController(
@@ -178,7 +200,24 @@ class _ScannerScreenState extends State<ScannerScreen>
       try {
         await _controller.unlockCaptureOrientation();
       } catch (_) {}
-      setState(() => _capturedImage = imageFile);
+      
+      final croppedFile = await ImageCropper().cropImage(
+        sourcePath: imageFile.path,
+        uiSettings: [
+          AndroidUiSettings(
+            toolbarTitle: 'Kırpma',
+            toolbarColor: const Color(0xFF14141F),
+            toolbarWidgetColor: Colors.white,
+            initAspectRatio: CropAspectRatioPreset.original,
+            lockAspectRatio: false,
+          ),
+          IOSUiSettings(
+            title: 'Kırpma',
+          ),
+        ],
+      );
+
+      setState(() => _capturedImage = croppedFile != null ? XFile(croppedFile.path) : imageFile);
     } catch (e) {
       if (mounted) _showErrorSheet('Beklenmeyen Hata', e.toString());
     }
@@ -209,10 +248,7 @@ class _ScannerScreenState extends State<ScannerScreen>
             msg.contains('unpack')) {
           _showErrorSheet(
             '📸 Fotoğraf Okunamadı!',
-            'Lütfen şunlara dikkat edin:\n\n'
-                '• Kağıdın 4 köşesindeki yuvarlaklar tam olarak görünmeli.\n'
-                '• Ekran veya kağıt üzerinde parlama/yansıma olmamalı.\n'
-                '• Görüntü net ve odaklanmış olmalı.',
+            'Daireler algılanamadı, lütfen tekrar deneyin.',
           );
         } else {
           _showErrorSheet('Sunucu Hatası', e.message);
@@ -359,6 +395,34 @@ class _ConfirmView extends StatelessWidget {
     required this.isLoading,
   });
 
+  void _showConfirmDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF14141F),
+        title: Text('Hatırlatma', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold)),
+        content: Text(
+          'Arka planın düz beyaz olması okuma kalitesini artırır. Eğer arka plan karmaşıksa lütfen kırpma alanını daraltın. (Herhangi bir değişiklik yapmadıysanız orijinal görsel gönderilir).',
+          style: GoogleFonts.inter(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('İptal', style: GoogleFonts.inter(color: Colors.white54)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF7C6BE8)),
+            onPressed: () {
+              Navigator.pop(ctx);
+              onSend();
+            },
+            child: Text('GÖNDER', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final bottom = MediaQuery.of(context).padding.bottom;
@@ -393,7 +457,7 @@ class _ConfirmView extends StatelessWidget {
                 const SizedBox(width: 16),
                 Expanded(
                   child: ElevatedButton(
-                    onPressed: isLoading ? null : onSend,
+                    onPressed: isLoading ? null : () => _showConfirmDialog(context),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF7C6BE8),
                       foregroundColor: Colors.white,
@@ -401,7 +465,7 @@ class _ConfirmView extends StatelessWidget {
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                       elevation: 0,
                     ),
-                    child: Text('Gönder', style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.bold)),
+                    child: Text('Onayla', style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.bold)),
                   ),
                 ),
               ],
