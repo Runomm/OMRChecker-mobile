@@ -52,8 +52,13 @@ class OMRDashboard(ctk.CTk):
         self.label = ctk.CTkLabel(self.header_frame, text="OMR Kontrol Paneli", font=ctk.CTkFont(size=24, weight="bold"))
         self.label.pack()
         
-        self.ip_label = ctk.CTkLabel(self.header_frame, text="IP Tespit Ediliyor...", font=ctk.CTkFont(size=14, weight="bold"), text_color="#3498db")
-        self.ip_label.pack()
+        self.ip_label = ctk.CTkLabel(self.header_frame, text="Mobil uygulamaya şu IP adresini girin:", font=ctk.CTkFont(size=14, weight="bold"))
+        self.ip_label.pack(pady=(5, 0))
+
+        self.ip_entry = ctk.CTkEntry(self.header_frame, font=ctk.CTkFont(size=16, weight="bold"), text_color="#3498db", justify="center", width=160)
+        self.ip_entry.insert(0, "IP Tespit Ediliyor...")
+        self.ip_entry.configure(state="readonly")
+        self.ip_entry.pack(pady=(5, 0))
 
         # --- Sunucu Kontrol Bölümü ---
         self.server_frame = ctk.CTkFrame(self)
@@ -110,7 +115,10 @@ class OMRDashboard(ctk.CTk):
             s.close()
         except:
             pass
-        self.ip_label.configure(text=f"Mobil Uygulama Bağlantı IP: {local_ip}:8000")
+        self.ip_entry.configure(state="normal")
+        self.ip_entry.delete(0, 'end')
+        self.ip_entry.insert(0, local_ip)
+        self.ip_entry.configure(state="readonly")
 
     def upload_students(self):
         file_path = filedialog.askopenfilename(filetypes=[("Excel Files", "*.xlsx")])

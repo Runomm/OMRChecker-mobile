@@ -10,10 +10,9 @@ import 'package:http_parser/http_parser.dart';
 import 'package:image_cropper/image_cropper.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ⚙️  CONFIG — backend machine's LAN IP
+// ⚙️  CONFIG — (Removed hardcoded IP)
 // ─────────────────────────────────────────────────────────────────────────────
-const String kApiBaseUrl = 'http://172.20.10.6:8000';
-const String kEvaluateEndpoint = '$kApiBaseUrl/evaluate';
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Entry point
@@ -107,6 +106,8 @@ class _ScannerScreenState extends State<ScannerScreen>
   late AnimationController _pulseCtrl;
   late Animation<double> _pulseAnim;
 
+  final TextEditingController _ipController = TextEditingController(text: '192.168.1.100');
+
   @override
   void initState() {
     super.initState();
@@ -189,6 +190,7 @@ class _ScannerScreenState extends State<ScannerScreen>
     WidgetsBinding.instance.removeObserver(this);
     _pulseCtrl.dispose();
     _controller.dispose();
+    _ipController.dispose();
     super.dispose();
   }
 
@@ -236,7 +238,7 @@ class _ScannerScreenState extends State<ScannerScreen>
       if (mounted) {
         _showErrorSheet(
           'Sunucuya Bağlanılamadı',
-          'Arka ucun çalıştığından ve her iki cihazın aynı Wi-Fi ağında olduğundan emin olun.\n\nBackend URL:\n$kApiBaseUrl',
+          'Arka ucun çalıştığından ve her iki cihazın aynı Wi-Fi ağında olduğundan emin olun.\n\nBağlanılan IP: ${_ipController.text}',
         );
       }
     } on HttpException catch (e) {
@@ -271,7 +273,12 @@ class _ScannerScreenState extends State<ScannerScreen>
   }
 
   Future<Map<String, dynamic>> _uploadImage(XFile imageFile) async {
-    final uri = Uri.parse(kEvaluateEndpoint);
+    final enteredIp = _ipController.text.trim();
+    if (enteredIp.isEmpty) {
+      throw const HttpException('Lütfen sunucu IP adresini giriniz.');
+    }
+    final uri = Uri.parse('http://$enteredIp:8000/evaluate');
+
     final request = http.MultipartRequest('POST', uri)
       ..files.add(await http.MultipartFile.fromPath(
         'file',
@@ -358,6 +365,7 @@ class _ScannerScreenState extends State<ScannerScreen>
                   cameras: widget.cameras,
                   selectedCamera: _selectedCamera,
                   onCameraSelected: _onCameraSelected,
+                  ipController: _ipController,
                 )
               ),
               Positioned(
@@ -581,18 +589,20 @@ class _TopBar extends StatelessWidget {
   final List<CameraDescription> cameras;
   final CameraDescription selectedCamera;
   final ValueChanged<CameraDescription> onCameraSelected;
+  final TextEditingController ipController;
 
   const _TopBar({
     required this.cameras,
     required this.selectedCamera,
     required this.onCameraSelected,
+    required this.ipController,
   });
 
   @override
   Widget build(BuildContext context) {
     final top = MediaQuery.of(context).padding.top;
     return Container(
-      height: top + 100,
+      height: top + 150,
       decoration: const BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topCenter,
@@ -601,9 +611,11 @@ class _TopBar extends StatelessWidget {
         ),
       ),
       padding: EdgeInsets.only(top: top + 20, left: 24, right: 24),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Column(
         children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
           Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
@@ -658,6 +670,36 @@ class _TopBar extends StatelessWidget {
                 ),
               ),
             ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          // Server IP Input
+          TextField(
+            controller: ipController,
+            style: GoogleFonts.inter(color: Colors.white, fontSize: 14),
+            keyboardType: TextInputType.url,
+            decoration: InputDecoration(
+              isDense: true,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              prefixIcon: const Icon(Icons.wifi, color: Colors.white54, size: 20),
+              filled: true,
+              fillColor: Colors.black45,
+              hintText: '192.168.1.100',
+              hintStyle: GoogleFonts.inter(color: Colors.white38),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: Colors.white24),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: Colors.white24),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: const BorderSide(color: Color(0xFF7C6BE8)),
+              ),
+            ),
+          ),
         ],
       ),
     );
