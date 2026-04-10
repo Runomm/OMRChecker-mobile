@@ -8,11 +8,15 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import 'package:image_cropper/image_cropper.dart';
+import 'package:image/image.dart' as img;
+import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ⚙️  CONFIG — (Removed hardcoded IP)
+// ⚙️  CONFIG
 // ─────────────────────────────────────────────────────────────────────────────
 
+String? globalServerUrl;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Entry point
@@ -24,6 +28,10 @@ Future<void> main() async {
     statusBarColor: Colors.transparent,
     statusBarIconBrightness: Brightness.light,
   ));
+  
+  final prefs = await SharedPreferences.getInstance();
+  globalServerUrl = prefs.getString('server_url');
+
   final allCameras = await availableCameras();
   final backCameras = allCameras.where((c) => c.lensDirection == CameraLensDirection.back).toList();
   runApp(OmrScannerApp(cameras: backCameras));
@@ -54,7 +62,9 @@ class OmrScannerApp extends StatelessWidget {
       ),
       home: cameras.isEmpty
           ? const _NoCameraScreen()
-          : ScannerScreen(cameras: cameras),
+          : (globalServerUrl == null || globalServerUrl!.isEmpty)
+              ? QRScannerScreen(cameras: cameras)
+              : ScannerScreen(cameras: cameras, serverUrl: globalServerUrl!),
     );
   }
 }
@@ -84,11 +94,99 @@ class _NoCameraScreen extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// QR Scanner Screen
+// ─────────────────────────────────────────────────────────────────────────────
+class QRScannerScreen extends StatefulWidget {
+  final List<CameraDescription> cameras;
+  final bool isChanging;
+  const QRScannerScreen({super.key, required this.cameras, this.isChanging = false});
+
+  @override
+  State<QRScannerScreen> createState() => _QRScannerScreenState();
+}
+
+class _QRScannerScreenState extends State<QRScannerScreen> {
+  final MobileScannerController _scannerController = MobileScannerController();
+  bool _hasScanned = false;
+
+  @override
+  void dispose() {
+    _scannerController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _onDetect(BarcodeCapture capture) async {
+    if (_hasScanned) return;
+    final List<Barcode> barcodes = capture.barcodes;
+    if (barcodes.isNotEmpty && barcodes.first.rawValue != null) {
+      final code = barcodes.first.rawValue!;
+      if (code.isNotEmpty) {
+        _hasScanned = true;
+        
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('server_url', code);
+        globalServerUrl = code;
+
+        if (mounted) {
+          if (widget.isChanging) {
+            Navigator.pop(context, code);
+          } else {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                  builder: (_) => ScannerScreen(
+                      cameras: widget.cameras, serverUrl: code)),
+            );
+          }
+        }
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Sunucu QR Kodunu Okutun', style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.bold)),
+        backgroundColor: const Color(0xFF14141F),
+        iconTheme: const IconThemeData(color: Colors.white),
+      ),
+      body: Stack(
+        children: [
+          MobileScanner(
+            controller: _scannerController,
+            onDetect: _onDetect,
+          ),
+          Positioned(
+            bottom: 40,
+            left: 20,
+            right: 20,
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.black54,
+                borderRadius: BorderRadius.circular(16)
+              ),
+              child: Text(
+                'Lütfen masaüstü uygulamasında görünen QR kodu okutun.',
+                textAlign: TextAlign.center,
+                style: GoogleFonts.inter(color: Colors.white, fontSize: 14),
+              ),
+            ),
+          )
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Scanner Screen
 // ─────────────────────────────────────────────────────────────────────────────
 class ScannerScreen extends StatefulWidget {
   final List<CameraDescription> cameras;
-  const ScannerScreen({super.key, required this.cameras});
+  final String serverUrl;
+  const ScannerScreen({super.key, required this.cameras, required this.serverUrl});
 
   @override
   State<ScannerScreen> createState() => _ScannerScreenState();
@@ -101,16 +199,17 @@ class _ScannerScreenState extends State<ScannerScreen>
   late CameraDescription _selectedCamera;
   
   bool _isLoading = false;
+  bool _isProcessing = false;
   XFile? _capturedImage;
+  late String _currentServerUrl;
 
   late AnimationController _pulseCtrl;
   late Animation<double> _pulseAnim;
 
-  final TextEditingController _ipController = TextEditingController(text: '192.168.1.100');
-
   @override
   void initState() {
     super.initState();
+    _currentServerUrl = widget.serverUrl;
     WidgetsBinding.instance.addObserver(this);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -175,8 +274,10 @@ class _ScannerScreenState extends State<ScannerScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (!_controller.value.isInitialized) return;
-    if (state == AppLifecycleState.inactive) {
-      _controller.dispose();
+    if (state == AppLifecycleState.inactive || state == AppLifecycleState.paused) {
+      if (!_isProcessing) {
+        _controller.dispose();
+      }
     } else if (state == AppLifecycleState.resumed) {
       if (_capturedImage == null) {
         _initCamera();
@@ -189,13 +290,29 @@ class _ScannerScreenState extends State<ScannerScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _pulseCtrl.dispose();
-    _controller.dispose();
-    _ipController.dispose();
+    if (_controller.value.isInitialized) {
+      _controller.dispose();
+    }
     super.dispose();
   }
 
+  Future<void> _onChangeQR() async {
+    final newUrl = await Navigator.push<String?>(
+      context,
+      MaterialPageRoute(builder: (_) => QRScannerScreen(cameras: widget.cameras, isChanging: true)),
+    );
+    if (newUrl != null && newUrl.isNotEmpty && mounted) {
+      setState(() {
+        _currentServerUrl = newUrl;
+      });
+    }
+  }
+
   Future<void> _onCapturePressed() async {
-    if (_isLoading || !_controller.value.isInitialized) return;
+    if (!mounted || !_controller.value.isInitialized) return;
+    if (_controller.value.isTakingPicture || _isProcessing || _isLoading) return;
+    
+    setState(() => _isProcessing = true);
     try {
       await _controller.lockCaptureOrientation(DeviceOrientation.portraitUp);
       final XFile imageFile = await _controller.takePicture();
@@ -222,13 +339,45 @@ class _ScannerScreenState extends State<ScannerScreen>
       setState(() => _capturedImage = croppedFile != null ? XFile(croppedFile.path) : imageFile);
     } catch (e) {
       if (mounted) _showErrorSheet('Beklenmeyen Hata', e.toString());
+    } finally {
+      if (mounted) setState(() => _isProcessing = false);
     }
   }
 
   Future<void> _onSendPressed() async {
     if (_capturedImage == null) return;
     setState(() => _isLoading = true);
+    
     try {
+      // ──────────────────────────────────────────
+      // Center-Square Cropping & Resize (3000x3000)
+      // ──────────────────────────────────────────
+      final bytes = await File(_capturedImage!.path).readAsBytes();
+      img.Image? decoded = img.decodeImage(bytes);
+      
+      if (decoded != null) {
+        if (decoded.height > decoded.width) {
+          int cropY = (decoded.height - decoded.width) ~/ 2;
+          decoded = img.copyCrop(decoded, x: 0, y: cropY, width: decoded.width, height: decoded.width);
+        } else if (decoded.width > decoded.height) {
+          int cropX = (decoded.width - decoded.height) ~/ 2;
+          decoded = img.copyCrop(decoded, x: cropX, y: 0, width: decoded.height, height: decoded.height);
+        }
+        
+        decoded = img.copyResize(decoded, width: 3000, height: 3000);
+        
+        final newBytes = img.encodeJpg(decoded, quality: 95);
+        final newPath = _capturedImage!.path.replaceAll(RegExp(r'\.jpg$'), '_square-3000.jpg');
+        
+        // Write without assuming extension is strictly there
+        final outputFile = newPath == _capturedImage!.path 
+            ? File('${_capturedImage!.path}_square-3000.jpg')
+            : File(newPath);
+
+        await outputFile.writeAsBytes(newBytes);
+        _capturedImage = XFile(outputFile.path);
+      }
+
       final result = await _uploadImage(_capturedImage!);
       if (mounted) {
         setState(() => _capturedImage = null);
@@ -238,7 +387,7 @@ class _ScannerScreenState extends State<ScannerScreen>
       if (mounted) {
         _showErrorSheet(
           'Sunucuya Bağlanılamadı',
-          'Arka ucun çalıştığından ve her iki cihazın aynı Wi-Fi ağında olduğundan emin olun.\n\nBağlanılan IP: ${_ipController.text}',
+          'Arka ucun çalıştığından ve her iki cihazın aynı Wi-Fi ağında olduğundan emin olun.\n\nBağlanılan URL: $_currentServerUrl',
         );
       }
     } on HttpException catch (e) {
@@ -273,11 +422,21 @@ class _ScannerScreenState extends State<ScannerScreen>
   }
 
   Future<Map<String, dynamic>> _uploadImage(XFile imageFile) async {
-    final enteredIp = _ipController.text.trim();
-    if (enteredIp.isEmpty) {
-      throw const HttpException('Lütfen sunucu IP adresini giriniz.');
+    if (_currentServerUrl.isEmpty) {
+      throw const HttpException('Lütfen sunucu QR kodunu okutunuz.');
     }
-    final uri = Uri.parse('http://$enteredIp:8000/evaluate');
+    
+    String urlStr = _currentServerUrl.trim();
+    if (!urlStr.startsWith('http')) {
+      urlStr = 'http://$urlStr';
+    }
+    if (!urlStr.contains(':8000') && urlStr.split(':').length <= 2) {
+      urlStr = '$urlStr:8000';
+    }
+    if (!urlStr.endsWith('/evaluate')) {
+      urlStr = urlStr.endsWith('/') ? '${urlStr}evaluate' : '$urlStr/evaluate';
+    }
+    final uri = Uri.parse(urlStr);
 
     final request = http.MultipartRequest('POST', uri)
       ..files.add(await http.MultipartFile.fromPath(
@@ -365,7 +524,8 @@ class _ScannerScreenState extends State<ScannerScreen>
                   cameras: widget.cameras,
                   selectedCamera: _selectedCamera,
                   onCameraSelected: _onCameraSelected,
-                  ipController: _ipController,
+                  serverUrl: _currentServerUrl,
+                  onScanQR: _onChangeQR,
                 )
               ),
               Positioned(
@@ -513,6 +673,7 @@ class _FullscreenPreviewState extends State<_FullscreenPreview>
   }
 
   void _onTapDown(TapDownDetails details, BoxConstraints constraints) {
+    if (!widget.controller.value.isInitialized) return;
     final x = details.localPosition.dx / constraints.maxWidth;
     final y = details.localPosition.dy / constraints.maxHeight;
 
@@ -589,13 +750,15 @@ class _TopBar extends StatelessWidget {
   final List<CameraDescription> cameras;
   final CameraDescription selectedCamera;
   final ValueChanged<CameraDescription> onCameraSelected;
-  final TextEditingController ipController;
+  final String serverUrl;
+  final VoidCallback onScanQR;
 
   const _TopBar({
     required this.cameras,
     required this.selectedCamera,
     required this.onCameraSelected,
-    required this.ipController,
+    required this.serverUrl,
+    required this.onScanQR,
   });
 
   @override
@@ -616,87 +779,90 @@ class _TopBar extends StatelessWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: const Color(0xFF7C6BE8).withOpacity(0.2),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                  color: const Color(0xFF7C6BE8).withOpacity(0.4), width: 1),
-            ),
-            child: const Icon(Icons.document_scanner_rounded,
-                color: Color(0xFF7C6BE8), size: 22),
-          ),
-          const SizedBox(width: 12),
-          Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('OMR Tarayıcı',
-                  style: GoogleFonts.inter(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold)),
-              Text('Optik forma hizalayın',
-                  style:
-                      GoogleFonts.inter(color: Colors.white54, fontSize: 12)),
-            ],
-          ),
-          const Spacer(),
-          if (cameras.length > 1)
-            Container(
-              height: 38,
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              decoration: BoxDecoration(
-                color: Colors.black45,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.white24)
-              ),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<CameraDescription>(
-                  value: selectedCamera,
-                  dropdownColor: const Color(0xFF14141F),
-                  icon: const Icon(Icons.keyboard_arrow_down, color: Colors.white, size: 20),
-                  style: GoogleFonts.inter(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500),
-                  items: cameras.asMap().entries.map((entry) {
-                    return DropdownMenuItem(
-                      value: entry.value,
-                      child: Text('Kamera ${entry.key + 1}'),
-                    );
-                  }).toList(),
-                  onChanged: (cam) {
-                    if (cam != null) onCameraSelected(cam);
-                  },
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF7C6BE8).withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                      color: const Color(0xFF7C6BE8).withOpacity(0.4), width: 1),
                 ),
+                child: const Icon(Icons.document_scanner_rounded,
+                    color: Color(0xFF7C6BE8), size: 22),
               ),
-            ),
+              const SizedBox(width: 12),
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('OMR Tarayıcı',
+                      style: GoogleFonts.inter(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold)),
+                  Text('Optik forma hizalayın',
+                      style:
+                          GoogleFonts.inter(color: Colors.white54, fontSize: 12)),
+                ],
+              ),
+              const Spacer(),
+              if (cameras.length > 1)
+                Container(
+                  height: 38,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.black45,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.white24)
+                  ),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<CameraDescription>(
+                      value: selectedCamera,
+                      dropdownColor: const Color(0xFF14141F),
+                      icon: const Icon(Icons.keyboard_arrow_down, color: Colors.white, size: 20),
+                      style: GoogleFonts.inter(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500),
+                      items: cameras.asMap().entries.map((entry) {
+                        return DropdownMenuItem(
+                          value: entry.value,
+                          child: Text('Kamera ${entry.key + 1}'),
+                        );
+                      }).toList(),
+                      onChanged: (cam) {
+                        if (cam != null) onCameraSelected(cam);
+                      },
+                    ),
+                  ),
+                ),
             ],
           ),
           const SizedBox(height: 16),
-          // Server IP Input
-          TextField(
-            controller: ipController,
-            style: GoogleFonts.inter(color: Colors.white, fontSize: 14),
-            keyboardType: TextInputType.url,
-            decoration: InputDecoration(
-              isDense: true,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              prefixIcon: const Icon(Icons.wifi, color: Colors.white54, size: 20),
-              filled: true,
-              fillColor: Colors.black45,
-              hintText: '192.168.1.100',
-              hintStyle: GoogleFonts.inter(color: Colors.white38),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: Colors.white24),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: Colors.white24),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: Color(0xFF7C6BE8)),
+          // Server QR Display & Change
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: onScanQR,
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                decoration: BoxDecoration(
+                  color: Colors.black45,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.white24),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.qr_code_scanner, color: Colors.white54, size: 20),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        serverUrl.isEmpty ? 'Sunucu Bağlantısı Yok' : serverUrl,
+                        style: GoogleFonts.inter(color: Colors.white, fontSize: 14),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const Icon(Icons.edit, color: Colors.white38, size: 16),
+                  ],
+                ),
               ),
             ),
           ),

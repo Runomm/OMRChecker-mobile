@@ -24,7 +24,14 @@ dependencies:
 
   # Material icons
   cupertino_icons: ^1.0.8
+
+  # Note: Kept image_cropper as per user request
   image_cropper: ^12.1.1
+
+  # Added for critical features
+  mobile_scanner: ^5.0.0
+  shared_preferences: ^2.2.3
+  image: ^4.1.7
 
 dev_dependencies:
   flutter_test:

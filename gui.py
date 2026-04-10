@@ -14,9 +14,31 @@ import customtkinter as ctk
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
+def initialize_inputs_folder():
+    """Extracts embedded Templates from PyInstaller MEIPASS to a local inputs folder."""
+    if hasattr(sys, "_MEIPASS"):
+        exe_dir = os.path.dirname(sys.executable)
+        target_dir = os.path.join(exe_dir, "inputs")
+        source_dir = os.path.join(sys._MEIPASS, "Templates")
+        
+        os.makedirs(target_dir, exist_ok=True)
+        
+        if os.path.exists(source_dir):
+            for item in os.listdir(source_dir):
+                s = os.path.join(source_dir, item)
+                d = os.path.join(target_dir, item)
+                if not os.path.exists(d):
+                    if os.path.isdir(s):
+                        shutil.copytree(s, d)
+                    else:
+                        shutil.copy2(s, d)
+
 class OMRDashboard(ctk.CTk):
     def __init__(self):
         super().__init__()
+
+        # Eğer uygulama PyInstaller ile EXE yapılmışsa gömülü Template dosyalarını dışarı çıkar
+        initialize_inputs_folder()
 
         self.title("OMRChecker - Akıllı Optik Okuma Sistemi")
         self.geometry("750x650")
@@ -59,6 +81,10 @@ class OMRDashboard(ctk.CTk):
         self.ip_entry.insert(0, "IP Tespit Ediliyor...")
         self.ip_entry.configure(state="readonly")
         self.ip_entry.pack(pady=(5, 0))
+
+        # QR Kod Alanı
+        self.qr_label = tk.Label(self.header_frame, text="Sunucu Kapalı\n(QR Kod Bekleniyor)", bg="#2c3e50", fg="white", font=("Arial", 12), width=25, height=10)
+        self.qr_label.pack(pady=(15, 0))
 
         # --- Sunucu Kontrol Bölümü ---
         self.server_frame = ctk.CTkFrame(self)
@@ -164,6 +190,23 @@ class OMRDashboard(ctk.CTk):
             
             self.btn_server.configure(text="SUNUCUYU DURDUR", fg_color="#e74c3c", hover_color="#c0392b")
             self.log_message("✅ Sunucu başlatıldı (Loglar konsola yönlendirilmiyor zira dahili çalışıyor).")
+            
+            # --- Dinamik QR Kodu Oluşturma ---
+            try:
+                import qrcode
+                from PIL import Image, ImageTk
+                local_ip = self.ip_entry.get()
+                server_url = f"http://{local_ip}:8000"
+                qr = qrcode.QRCode(version=1, box_size=10, border=4)
+                qr.add_data(server_url)
+                qr.make(fit=True)
+                img = qr.make_image(fill_color="black", back_color="white")
+                img = img.resize((200, 200), Image.Resampling.LANCZOS)
+                self.qr_photo = ImageTk.PhotoImage(img) # Prevent garbage collection
+                self.qr_label.configure(image=self.qr_photo, width=200, height=200)
+            except Exception as e:
+                self.log_message(f"⚠️ QR kod oluşturulamadı: {e}")
+                
         except Exception as e:
             self.log_message(f"❌ Sunucu başlatılamadı: {e}")
 
@@ -175,6 +218,9 @@ class OMRDashboard(ctk.CTk):
             
             self.btn_server.configure(text="SUNUCUYU BAŞLAT", fg_color="green", hover_color="#228B22")
             self.log_message("🛑 Sunucu durduruldu.")
+            
+            # QR Kodunu Temizle
+            self.qr_label.configure(image="", text="Sunucu Kapalı\n(QR Kod Bekleniyor)", width=25, height=10, bg="#2c3e50")
 
     def capture_server_logs(self):
         pass

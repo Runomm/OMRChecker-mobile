@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_submodules
 
-hiddenimports = ['uvicorn', 'fastapi', 'pydantic', 'starlette', 'cv2', 'pandas', 'main']
+hiddenimports = ['uvicorn', 'fastapi', 'pydantic', 'starlette', 'cv2', 'pandas', 'main', 'qrcode']
 hiddenimports += collect_submodules('src.processors')
 
 
@@ -9,7 +9,7 @@ a = Analysis(
     ['gui.py'],
     pathex=[],
     binaries=[],
-    datas=[('inputs', 'inputs')],
+    datas=[('Templates', 'Templates')],
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
