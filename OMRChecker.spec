@@ -9,7 +9,7 @@ a = Analysis(
     ['gui.py'],
     pathex=[],
     binaries=[],
-    datas=[('Templates', 'Templates')],
+    datas=[('inputs_Template', 'Templates')],
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
